@@ -35,6 +35,9 @@ pub(crate) mod v1;
 #[cfg_attr(docsrs, doc(cfg(feature = "v2")))]
 pub mod v2;
 
+#[cfg(feature = "multiparty")]
+pub mod multiparty;
+
 type InternalResult<T> = Result<T, InternalProposalError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
