@@ -38,7 +38,7 @@ use crate::{HpkeKeyPair, HpkePublicKey, IntoUrl, PjUri, Request};
 mod error;
 
 #[derive(Clone)]
-pub struct SenderBuilder<'a>(v1::SenderBuilder<'a>);
+pub struct SenderBuilder<'a>(pub(crate) v1::SenderBuilder<'a>);
 
 impl<'a> SenderBuilder<'a> {
     /// Prepare the context from which to make Sender requests
@@ -119,9 +119,9 @@ impl<'a> SenderBuilder<'a> {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sender {
     /// The v1 Sender.
-    v1: v1::Sender,
+    pub(crate) v1: v1::Sender,
     /// The secret key to decrypt the receiver's reply.
-    reply_key: HpkeSecretKey,
+    pub(crate) reply_key: HpkeSecretKey,
 }
 
 impl Sender {
@@ -184,7 +184,7 @@ impl Sender {
         ))
     }
 
-    fn extract_rs_pubkey(
+    pub(crate) fn extract_rs_pubkey(
         &self,
     ) -> Result<HpkePublicKey, crate::uri::url_ext::ParseReceiverPubkeyParamError> {
         self.v1.endpoint.receiver_pubkey()
@@ -193,7 +193,7 @@ impl Sender {
     pub fn endpoint(&self) -> &Url { self.v1.endpoint() }
 }
 
-fn serialize_v2_body(
+pub(crate) fn serialize_v2_body(
     psbt: &Psbt,
     disable_output_substitution: bool,
     fee_contribution: Option<AdditionalFeeContribution>,
@@ -215,10 +215,10 @@ fn serialize_v2_body(
 
 pub struct V2PostContext {
     /// The payjoin directory subdirectory to send the request to.
-    endpoint: Url,
-    psbt_ctx: PsbtContext,
-    hpke_ctx: HpkeContext,
-    ohttp_ctx: ohttp::ClientResponse,
+    pub(crate) endpoint: Url,
+    pub(crate) psbt_ctx: PsbtContext,
+    pub(crate) hpke_ctx: HpkeContext,
+    pub(crate) ohttp_ctx: ohttp::ClientResponse,
 }
 
 impl V2PostContext {
@@ -245,9 +245,9 @@ impl V2PostContext {
 #[derive(Debug, Clone)]
 pub struct V2GetContext {
     /// The payjoin directory subdirectory to send the request to.
-    endpoint: Url,
-    psbt_ctx: PsbtContext,
-    hpke_ctx: HpkeContext,
+    pub(crate) endpoint: Url,
+    pub(crate) psbt_ctx: PsbtContext,
+    pub(crate) hpke_ctx: HpkeContext,
 }
 
 impl V2GetContext {
@@ -310,9 +310,9 @@ impl V2GetContext {
 
 #[cfg(feature = "v2")]
 #[derive(Debug, Clone)]
-struct HpkeContext {
-    receiver: HpkePublicKey,
-    reply_pair: HpkeKeyPair,
+pub(crate) struct HpkeContext {
+    pub(crate) receiver: HpkePublicKey,
+    pub(crate) reply_pair: HpkeKeyPair,
 }
 
 #[cfg(feature = "v2")]
