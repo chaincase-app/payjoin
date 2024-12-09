@@ -25,6 +25,8 @@ use crate::psbt::{InternalInputPair, InternalPsbtInputError, PsbtExt};
 mod error;
 pub(crate) mod optional_parameters;
 
+#[cfg(feature = "multi-party")]
+pub mod multi_party;
 #[cfg(feature = "v1")]
 #[cfg_attr(docsrs, doc(cfg(feature = "v1")))]
 pub mod v1;
