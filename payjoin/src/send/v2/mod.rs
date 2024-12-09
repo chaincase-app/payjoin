@@ -38,7 +38,7 @@ use crate::{HpkeKeyPair, HpkePublicKey, PjUri, Request};
 mod error;
 
 #[derive(Clone)]
-pub struct SenderBuilder<'a>(v1::SenderBuilder<'a>);
+pub struct SenderBuilder<'a>(pub(crate) v1::SenderBuilder<'a>);
 
 impl<'a> SenderBuilder<'a> {
     /// Prepare the context from which to make Sender requests
@@ -119,9 +119,9 @@ impl<'a> SenderBuilder<'a> {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sender {
     /// The v1 Sender.
-    v1: v1::Sender,
+    pub(crate) v1: v1::Sender,
     /// The secret key to decrypt the receiver's reply.
-    reply_key: HpkeSecretKey,
+    pub(crate) reply_key: HpkeSecretKey,
 }
 
 impl Sender {
@@ -154,6 +154,8 @@ impl Sender {
             self.v1.disable_output_substitution,
             self.v1.fee_contribution,
             self.v1.min_fee_rate,
+            #[cfg(feature = "multi-party")]
+            false,
         )?;
         let hpke_ctx = HpkeContext::new(rs, &self.reply_key);
         let body = encrypt_message_a(
@@ -177,6 +179,8 @@ impl Sender {
                     fee_contribution: self.v1.fee_contribution,
                     payee: self.v1.payee.clone(),
                     min_fee_rate: self.v1.min_fee_rate,
+                    #[cfg(feature = "multi-party")]
+                    opt_in_to_optimistic_merge: false,
                 },
                 hpke_ctx,
                 ohttp_ctx,
@@ -184,7 +188,7 @@ impl Sender {
         ))
     }
 
-    fn extract_rs_pubkey(
+    pub(crate) fn extract_rs_pubkey(
         &self,
     ) -> Result<HpkePublicKey, crate::uri::url_ext::ParseReceiverPubkeyParamError> {
         self.v1.endpoint.receiver_pubkey()
@@ -193,11 +197,12 @@ impl Sender {
     pub fn endpoint(&self) -> &Url { self.v1.endpoint() }
 }
 
-fn serialize_v2_body(
+pub(crate) fn serialize_v2_body(
     psbt: &Psbt,
     disable_output_substitution: bool,
     fee_contribution: Option<AdditionalFeeContribution>,
     min_fee_rate: FeeRate,
+    #[cfg(feature = "multi-party")] opt_in_to_optimistic_merge: bool,
 ) -> Result<Vec<u8>, CreateRequestError> {
     // Grug say localhost base be discarded anyway. no big brain needed.
     let placeholder_url = serialize_url(
@@ -206,6 +211,10 @@ fn serialize_v2_body(
         fee_contribution,
         min_fee_rate,
         "2", // payjoin version
+        #[cfg(feature = "multi-party")]
+        opt_in_to_optimistic_merge,
+        #[cfg(not(feature = "multi-party"))]
+        false,
     )
     .map_err(InternalCreateRequestError::Url)?;
     let query_params = placeholder_url.query().unwrap_or_default();
@@ -215,10 +224,10 @@ fn serialize_v2_body(
 
 pub struct V2PostContext {
     /// The payjoin directory subdirectory to send the request to.
-    endpoint: Url,
-    psbt_ctx: PsbtContext,
-    hpke_ctx: HpkeContext,
-    ohttp_ctx: ohttp::ClientResponse,
+    pub(crate) endpoint: Url,
+    pub(crate) psbt_ctx: PsbtContext,
+    pub(crate) hpke_ctx: HpkeContext,
+    pub(crate) ohttp_ctx: ohttp::ClientResponse,
 }
 
 impl V2PostContext {
@@ -245,9 +254,9 @@ impl V2PostContext {
 #[derive(Debug, Clone)]
 pub struct V2GetContext {
     /// The payjoin directory subdirectory to send the request to.
-    endpoint: Url,
-    psbt_ctx: PsbtContext,
-    hpke_ctx: HpkeContext,
+    pub(crate) endpoint: Url,
+    pub(crate) psbt_ctx: PsbtContext,
+    pub(crate) hpke_ctx: HpkeContext,
 }
 
 impl V2GetContext {
@@ -307,9 +316,9 @@ impl V2GetContext {
 
 #[cfg(feature = "v2")]
 #[derive(Debug, Clone)]
-struct HpkeContext {
-    receiver: HpkePublicKey,
-    reply_pair: HpkeKeyPair,
+pub(crate) struct HpkeContext {
+    pub(crate) receiver: HpkePublicKey,
+    pub(crate) reply_pair: HpkeKeyPair,
 }
 
 #[cfg(feature = "v2")]
