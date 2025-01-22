@@ -136,7 +136,7 @@ impl Sender {
     /// and has no fallback to v1.
     pub fn extract_v2(
         &self,
-        ohttp_relay: Url,
+        ohttp_relay: &Url,
     ) -> Result<(Request, V2PostContext), CreateRequestError> {
         use crate::hpke::encrypt_message_a;
         use crate::ohttp::ohttp_encapsulate;
@@ -255,7 +255,7 @@ pub struct V2GetContext {
 impl V2GetContext {
     pub fn extract_req(
         &self,
-        ohttp_relay: Url,
+        ohttp_relay: &Url,
     ) -> Result<(Request, ohttp::ClientResponse), CreateRequestError> {
         use crate::uri::UrlExt;
         let base_url = self.endpoint.clone();
@@ -317,7 +317,7 @@ struct HpkeContext {
 
 #[cfg(feature = "v2")]
 impl HpkeContext {
-    pub fn new(receiver: HpkePublicKey, reply_key: &HpkeSecretKey) -> Self {
+    fn new(receiver: HpkePublicKey, reply_key: &HpkeSecretKey) -> Self {
         Self { receiver, reply_pair: HpkeKeyPair::from_secret_key(reply_key) }
     }
 }

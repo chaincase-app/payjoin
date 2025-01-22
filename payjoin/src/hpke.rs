@@ -1,7 +1,9 @@
 use std::ops::Deref;
 use std::{error, fmt};
 
-use bitcoin::key::constants::{ELLSWIFT_ENCODING_SIZE, PUBLIC_KEY_SIZE};
+use bitcoin::key::constants::{
+    ELLSWIFT_ENCODING_SIZE, PUBLIC_KEY_SIZE, UNCOMPRESSED_PUBLIC_KEY_SIZE,
+};
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::ellswift::ElligatorSwift;
 use hpke::aead::ChaCha20Poly1305;
@@ -170,7 +172,7 @@ impl<'de> serde::Deserialize<'de> for HpkePublicKey {
 
 /// Message A is sent from the sender to the receiver containing an Original PSBT payload
 pub fn encrypt_message_a(
-    body: Vec<u8>,
+    body: &[u8],
     reply_pk: &HpkePublicKey,
     receiver_pk: &HpkePublicKey,
 ) -> Result<Vec<u8>, HpkeError> {
@@ -193,7 +195,7 @@ pub fn encrypt_message_a(
 
 pub fn decrypt_message_a(
     message_a: &[u8],
-    receiver_sk: HpkeSecretKey,
+    receiver_sk: &HpkeSecretKey,
 ) -> Result<(Vec<u8>, HpkePublicKey), HpkeError> {
     use std::io::{Cursor, Read};
 
@@ -222,7 +224,7 @@ pub fn decrypt_message_a(
 
 /// Message B is sent from the receiver to the sender containing a Payjoin PSBT payload or an error
 pub fn encrypt_message_b(
-    mut plaintext: Vec<u8>,
+    mut plaintext: &[u8],
     receiver_keypair: &HpkeKeyPair,
     sender_pk: &HpkePublicKey,
 ) -> Result<Vec<u8>, HpkeError> {
@@ -245,8 +247,8 @@ pub fn encrypt_message_b(
 
 pub fn decrypt_message_b(
     message_b: &[u8],
-    receiver_pk: HpkePublicKey,
-    sender_sk: HpkeSecretKey,
+    receiver_pk: &HpkePublicKey,
+    sender_sk: &HpkeSecretKey,
 ) -> Result<Vec<u8>, HpkeError> {
     let enc = message_b.get(..ELLSWIFT_ENCODING_SIZE).ok_or(HpkeError::PayloadTooShort)?;
     let enc = encapped_key_from_ellswift_bytes(enc)?;
@@ -258,14 +260,6 @@ pub fn decrypt_message_b(
     let plaintext = decryption_ctx
         .open(message_b.get(ELLSWIFT_ENCODING_SIZE..).ok_or(HpkeError::PayloadTooShort)?, &[])?;
     Ok(plaintext)
-}
-
-fn pad_plaintext(msg: &mut Vec<u8>, padded_length: usize) -> Result<&[u8], HpkeError> {
-    if msg.len() > padded_length {
-        return Err(HpkeError::PayloadTooLarge { actual: msg.len(), max: padded_length });
-    }
-    msg.resize(padded_length, 0);
-    Ok(msg)
 }
 
 /// Error from de/encrypting a v2 Hybrid Public Key Encryption payload.

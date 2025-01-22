@@ -91,7 +91,6 @@ pub struct ValidationError(InternalValidationError);
 #[derive(Debug)]
 pub(crate) enum InternalValidationError {
     Parse,
-    Io(std::io::Error),
     Proposal(InternalProposalError),
     #[cfg(feature = "v2")]
     V2Encapsulation(crate::send::v2::EncapsulationError),
@@ -115,7 +114,6 @@ impl fmt::Display for ValidationError {
 
         match &self.0 {
             Parse => write!(f, "couldn't decode as PSBT or JSON",),
-            Io(e) => write!(f, "couldn't read PSBT: {}", e),
             Proposal(e) => write!(f, "proposal PSBT error: {}", e),
             #[cfg(feature = "v2")]
             V2Encapsulation(e) => write!(f, "v2 encapsulation error: {}", e),
@@ -129,7 +127,6 @@ impl std::error::Error for ValidationError {
 
         match &self.0 {
             Parse => None,
-            Io(error) => Some(error),
             Proposal(e) => Some(e),
             #[cfg(feature = "v2")]
             V2Encapsulation(e) => Some(e),

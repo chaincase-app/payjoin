@@ -183,7 +183,7 @@ impl<'a> SenderBuilder<'a> {
     fn build(self) -> Result<Sender, BuildSenderError> {
         let mut psbt =
             self.psbt.validate().map_err(InternalBuildSenderError::InconsistentOriginalPsbt)?;
-        psbt.validate_input_utxos(true).map_err(InternalBuildSenderError::InvalidOriginalInput)?;
+        psbt.validate_input_utxos().map_err(InternalBuildSenderError::InvalidOriginalInput)?;
         let endpoint = self.uri.extras.endpoint.clone();
         let disable_output_substitution =
             self.uri.extras.disable_output_substitution || self.disable_output_substitution;
@@ -229,7 +229,7 @@ impl Sender {
     /// Extract serialized V1 Request and Context from a Payjoin Proposal
     pub fn extract_v1(&self) -> Result<(Request, V1Context), url::ParseError> {
         let url = serialize_url(
-            self.endpoint.clone(),
+            &self.endpoint,
             self.disable_output_substitution,
             self.fee_contribution,
             self.min_fee_rate,
@@ -237,7 +237,7 @@ impl Sender {
         )?;
         let body = self.psbt.to_string().as_bytes().to_vec();
         Ok((
-            Request::new_v1(url, body),
+            Request::new_v1(&url, &body),
             V1Context {
                 psbt_context: PsbtContext {
                     original_psbt: self.psbt.clone(),
@@ -269,13 +269,8 @@ impl V1Context {
     /// Call this method with response from receiver to continue BIP78 flow. If the response is
     /// valid you will get appropriate PSBT that you should sign and broadcast.
     #[inline]
-    pub fn process_response(
-        self,
-        response: &mut impl std::io::Read,
-    ) -> Result<Psbt, ResponseError> {
-        let mut res_str = String::new();
-        response.read_to_string(&mut res_str).map_err(InternalValidationError::Io)?;
-        let proposal = Psbt::from_str(&res_str).map_err(|_| ResponseError::parse(&res_str))?;
+    pub fn process_response(self, response: &str) -> Result<Psbt, ResponseError> {
+        let proposal = Psbt::from_str(response).map_err(|_| ResponseError::parse(response))?;
         self.psbt_context.process_proposal(proposal).map_err(Into::into)
     }
 }
@@ -296,7 +291,7 @@ mod test {
             "message": "This version of payjoin is not supported."
         })
         .to_string();
-        match ctx.process_response(&mut known_json_error.as_bytes()) {
+        match ctx.process_response(&known_json_error) {
             Err(ResponseError::WellKnown(WellKnownError::VersionUnsupported { .. })) => (),
             _ => panic!("Expected WellKnownError"),
         }
@@ -307,7 +302,7 @@ mod test {
             "message": "This version of payjoin is not supported."
         })
         .to_string();
-        match ctx.process_response(&mut invalid_json_error.as_bytes()) {
+        match ctx.process_response(&invalid_json_error) {
             Err(ResponseError::Validation(_)) => (),
             _ => panic!("Expected unrecognized JSON error"),
         }

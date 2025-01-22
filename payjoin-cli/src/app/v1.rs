@@ -89,6 +89,8 @@ impl AppTrait for App {
             .send()
             .await
             .with_context(|| "HTTP request failed")?;
+        let response_str = response.text().await.with_context(|| "Failed to read response")?;
+
         let fallback_tx = Psbt::from_str(&body)
             .map_err(|e| anyhow!("Failed to load PSBT from base64: {}", e))?
             .extract_tx()?;
@@ -97,12 +99,10 @@ impl AppTrait for App {
             "Sent fallback transaction hex: {:#}",
             payjoin::bitcoin::consensus::encode::serialize_hex(&fallback_tx)
         );
-        let psbt = ctx.process_response(&mut response.bytes().await?.to_vec().as_slice()).map_err(
-            |e| {
-                log::debug!("Error processing response: {:?}", e);
-                anyhow!("Failed to process response {}", e)
-            },
-        )?;
+        let psbt = ctx.process_response(&response_str).map_err(|e| {
+            log::debug!("Error processing response: {:?}", e);
+            anyhow!("Failed to process response {}", e)
+        })?;
 
         self.process_pj_response(psbt)?;
         Ok(())

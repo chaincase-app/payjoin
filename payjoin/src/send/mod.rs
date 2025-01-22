@@ -14,7 +14,7 @@ use std::str::FromStr;
 use bitcoin::psbt::Psbt;
 use bitcoin::{Amount, FeeRate, Script, ScriptBuf, TxOut, Weight};
 pub use error::{BuildSenderError, ResponseError, ValidationError};
-pub(crate) use error::{InternalBuildSenderError, InternalProposalError, InternalValidationError};
+pub(crate) use error::{InternalBuildSenderError, InternalProposalError};
 use url::Url;
 
 use crate::psbt::PsbtExt;
@@ -400,13 +400,13 @@ fn determine_fee_contribution(
 }
 
 fn serialize_url(
-    endpoint: Url,
+    endpoint: &Url,
     disable_output_substitution: bool,
     fee_contribution: Option<(bitcoin::Amount, usize)>,
     min_fee_rate: FeeRate,
     version: &str,
 ) -> Result<Url, url::ParseError> {
-    let mut url = endpoint;
+    let mut url = endpoint.clone();
     url.query_pairs_mut().append_pair("v", version);
     if disable_output_substitution {
         url.query_pairs_mut().append_pair("disableoutputsubstitution", "true");

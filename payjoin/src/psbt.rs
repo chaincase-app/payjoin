@@ -38,7 +38,7 @@ pub(crate) trait PsbtExt: Sized {
     // guarantees that length of psbt input matches that of unsigned_tx inputs and same
     /// thing for outputs.
     fn validate(self) -> Result<Self, InconsistentPsbt>;
-    fn validate_input_utxos(&self, treat_missing_as_error: bool) -> Result<(), PsbtInputsError>;
+    fn validate_input_utxos(&self) -> Result<(), PsbtInputsError>;
 }
 
 impl PsbtExt for Psbt {
@@ -83,11 +83,9 @@ impl PsbtExt for Psbt {
         }
     }
 
-    fn validate_input_utxos(&self, treat_missing_as_error: bool) -> Result<(), PsbtInputsError> {
+    fn validate_input_utxos(&self) -> Result<(), PsbtInputsError> {
         self.input_pairs().enumerate().try_for_each(|(index, input)| {
-            input
-                .validate_utxo(treat_missing_as_error)
-                .map_err(|error| PsbtInputsError { index, error })
+            input.validate_utxo().map_err(|error| PsbtInputsError { index, error })
         })
     }
 }
@@ -124,14 +122,10 @@ impl InternalInputPair<'_> {
         }
     }
 
-    pub fn validate_utxo(
-        &self,
-        treat_missing_as_error: bool,
-    ) -> Result<(), InternalPsbtInputError> {
+    pub fn validate_utxo(&self) -> Result<(), InternalPsbtInputError> {
         match (&self.psbtin.non_witness_utxo, &self.psbtin.witness_utxo) {
-            (None, None) if treat_missing_as_error =>
+            (None, None) =>
                 Err(InternalPsbtInputError::PrevTxOut(PrevTxOutError::MissingUtxoInformation)),
-            (None, None) => Ok(()),
             (Some(tx), None) if tx.compute_txid() == self.txin.previous_output.txid => tx
                 .output
                 .get::<usize>(self.txin.previous_output.vout.try_into().map_err(|_| {
