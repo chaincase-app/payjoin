@@ -2,7 +2,8 @@
 
 use reqwest::{Client, Proxy};
 
-use crate::{OhttpKeys, Url};
+use crate::into_url::IntoUrl;
+use crate::OhttpKeys;
 
 /// Fetch the ohttp keys from the specified payjoin directory via proxy.
 ///
@@ -13,11 +14,11 @@ use crate::{OhttpKeys, Url};
 /// * `payjoin_directory`: The payjoin directory from which to fetch the ohttp keys.  This
 ///   directory stores and forwards payjoin client payloads.
 pub async fn fetch_ohttp_keys(
-    ohttp_relay: Url,
-    payjoin_directory: Url,
+    ohttp_relay: impl IntoUrl,
+    payjoin_directory: impl IntoUrl,
 ) -> Result<OhttpKeys, Error> {
-    let ohttp_keys_url = payjoin_directory.join("/ohttp-keys")?;
-    let proxy = Proxy::all(ohttp_relay.as_str())?;
+    let ohttp_keys_url = payjoin_directory.into_url()?.join("/ohttp-keys")?;
+    let proxy = Proxy::all(ohttp_relay.into_url()?.as_str())?;
     let client = Client::builder().proxy(proxy).build()?;
     let res = client.get(ohttp_keys_url).send().await?;
     let body = res.bytes().await?.to_vec();
@@ -36,12 +37,12 @@ pub async fn fetch_ohttp_keys(
 /// * `cert_der`: The DER-encoded certificate to use for local HTTPS connections.
 #[cfg(feature = "_danger-local-https")]
 pub async fn fetch_ohttp_keys_with_cert(
-    ohttp_relay: Url,
-    payjoin_directory: Url,
+    ohttp_relay: impl IntoUrl,
+    payjoin_directory: impl IntoUrl,
     cert_der: Vec<u8>,
 ) -> Result<OhttpKeys, Error> {
-    let ohttp_keys_url = payjoin_directory.join("/ohttp-keys")?;
-    let proxy = Proxy::all(ohttp_relay.as_str())?;
+    let ohttp_keys_url = payjoin_directory.into_url()?.join("/ohttp-keys")?;
+    let proxy = Proxy::all(ohttp_relay.into_url()?.as_str())?;
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
         .use_rustls_tls()
@@ -58,12 +59,16 @@ pub struct Error(InternalError);
 
 #[derive(Debug)]
 enum InternalError {
-    ParseUrl(crate::ParseError),
+    ParseUrl(crate::into_url::Error),
     Reqwest(reqwest::Error),
     Io(std::io::Error),
     #[cfg(feature = "_danger-local-https")]
     Rustls(rustls::Error),
     InvalidOhttpKeys(String),
+}
+
+impl From<url::ParseError> for Error {
+    fn from(value: url::ParseError) -> Self { Self(InternalError::ParseUrl(value.into())) }
 }
 
 macro_rules! impl_from_error {
@@ -74,8 +79,8 @@ macro_rules! impl_from_error {
     };
 }
 
+impl_from_error!(crate::into_url::Error, ParseUrl);
 impl_from_error!(reqwest::Error, Reqwest);
-impl_from_error!(crate::ParseError, ParseUrl);
 impl_from_error!(std::io::Error, Io);
 #[cfg(feature = "_danger-local-https")]
 impl_from_error!(rustls::Error, Rustls);

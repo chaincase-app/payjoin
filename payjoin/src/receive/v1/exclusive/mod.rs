@@ -4,8 +4,8 @@ pub(crate) use error::InternalRequestError;
 pub use error::RequestError;
 
 use super::*;
+use crate::into_url::IntoUrl;
 use crate::receive::optional_parameters::Params;
-
 const SUPPORTED_VERSIONS: &[usize] = &[1];
 
 pub trait Headers {
@@ -14,12 +14,12 @@ pub trait Headers {
 
 pub fn build_v1_pj_uri<'a>(
     address: &bitcoin::Address,
-    endpoint: &url::Url,
+    endpoint: impl IntoUrl,
     disable_output_substitution: bool,
-) -> crate::uri::PjUri<'a> {
+) -> Result<crate::uri::PjUri<'a>, crate::into_url::Error> {
     let extras =
-        crate::uri::PayjoinExtras { endpoint: endpoint.clone(), disable_output_substitution };
-    bitcoin_uri::Uri::with_extras(address.clone(), extras)
+        crate::uri::PayjoinExtras { endpoint: endpoint.into_url()?, disable_output_substitution };
+    Ok(bitcoin_uri::Uri::with_extras(address.clone(), extras))
 }
 
 impl UncheckedProposal {
