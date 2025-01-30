@@ -484,7 +484,6 @@ impl PayjoinProposal {
 
     pub fn psbt(&self) -> &Psbt { self.v1.psbt() }
 
-    #[cfg(feature = "v2")]
     pub fn extract_v2_req(
         &mut self,
         ohttp_relay: impl IntoUrl,
