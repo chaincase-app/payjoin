@@ -12,7 +12,7 @@ pub struct CreateRequestError(InternalCreateRequestError);
 
 #[derive(Debug)]
 pub(crate) enum InternalCreateRequestError {
-    Url(url::ParseError),
+    Url(crate::into_url::Error),
     Hpke(crate::hpke::HpkeError),
     OhttpEncapsulation(crate::ohttp::OhttpEncapsulationError),
     ParseReceiverPubkey(ParseReceiverPubkeyParamError),
@@ -53,6 +53,12 @@ impl std::error::Error for CreateRequestError {
 
 impl From<InternalCreateRequestError> for CreateRequestError {
     fn from(value: InternalCreateRequestError) -> Self { CreateRequestError(value) }
+}
+
+impl From<crate::into_url::Error> for CreateRequestError {
+    fn from(value: crate::into_url::Error) -> Self {
+        CreateRequestError(InternalCreateRequestError::Url(value))
+    }
 }
 
 impl From<ParseReceiverPubkeyParamError> for CreateRequestError {

@@ -19,7 +19,7 @@ use crate::psbt::PsbtExt;
 use crate::receive::optional_parameters::Params;
 use crate::receive::InputPair;
 use crate::uri::ShortId;
-use crate::Request;
+use crate::{IntoUrl, Request};
 
 pub(crate) mod error;
 
@@ -75,14 +75,14 @@ impl Receiver {
     /// - [BIP 77: Payjoin Version 2: Serverless Payjoin](https://github.com/bitcoin/bips/pull/1483)
     pub fn new(
         address: Address,
-        directory: Url,
+        directory: impl IntoUrl,
         ohttp_keys: OhttpKeys,
         expire_after: Option<Duration>,
     ) -> Self {
         Self {
             context: SessionContext {
                 address,
-                directory,
+                directory: directory.into_url().unwrap(),
                 subdirectory: None,
                 ohttp_keys,
                 expiry: SystemTime::now()
@@ -96,14 +96,14 @@ impl Receiver {
     /// Extract an OHTTP Encapsulated HTTP GET request for the Original PSBT
     pub fn extract_req(
         &mut self,
-        ohttp_relay: &Url,
+        ohttp_relay: impl IntoUrl,
     ) -> Result<(Request, ohttp::ClientResponse), Error> {
         if SystemTime::now() > self.context.expiry {
             return Err(InternalSessionError::Expired(self.context.expiry).into());
         }
         let (body, ohttp_ctx) =
             self.fallback_req_body().map_err(InternalSessionError::OhttpEncapsulation)?;
-        let url = ohttp_relay.clone();
+        let url = ohttp_relay.into_url().map_err(InternalSessionError::ParseUrl)?;
         let req = Request::new_v2(url, body);
         Ok((req, ohttp_ctx))
     }
@@ -256,7 +256,7 @@ impl UncheckedProposal {
     pub fn extract_err_req(
         &mut self,
         err: &Error,
-        ohttp_relay: &Url,
+        ohttp_relay: impl IntoUrl,
     ) -> Result<(Request, ohttp::ClientResponse), SessionError> {
         let subdir = subdir(&self.context.directory, &id(&self.context.s));
         let (body, ohttp_ctx) = ohttp_encapsulate(
@@ -267,7 +267,8 @@ impl UncheckedProposal {
         )
         .map_err(InternalSessionError::OhttpEncapsulation)?;
 
-        let req = Request::new_v2(ohttp_relay.clone(), body);
+        let req =
+            Request::new_v2(ohttp_relay.into_url().map_err(InternalSessionError::ParseUrl)?, body);
         Ok((req, ohttp_ctx))
     }
 
@@ -483,10 +484,9 @@ impl PayjoinProposal {
 
     pub fn psbt(&self) -> &Psbt { self.v1.psbt() }
 
-    #[cfg(feature = "v2")]
     pub fn extract_v2_req(
         &mut self,
-        ohttp_relay: &Url,
+        ohttp_relay: impl IntoUrl,
     ) -> Result<(Request, ohttp::ClientResponse), Error> {
         let target_resource: Url;
         let body: Vec<u8>;
@@ -521,7 +521,7 @@ impl PayjoinProposal {
             target_resource.as_str(),
             Some(&body),
         )?;
-        let req = Request::new_v2(ohttp_relay.clone(), body);
+        let req = Request::new_v2(ohttp_relay.into_url().unwrap(), body);
         Ok((req, ctx))
     }
 
@@ -618,10 +618,12 @@ mod test {
             server_error.to_json(),
             r#"{ "errorCode": "unavailable", "message": "Receiver error" }"#
         );
-        let (_req, _ctx) = proposal.clone().extract_err_req(&server_error, &EXAMPLE_OHTTP_RELAY)?;
+        let (_req, _ctx) =
+            proposal.clone().extract_err_req(&server_error, EXAMPLE_OHTTP_RELAY.to_owned())?;
 
         let internal_error = Error::Validation(InternalPayloadError::MissingPayment.into());
-        let (_req, _ctx) = proposal.extract_err_req(&internal_error, &EXAMPLE_OHTTP_RELAY)?;
+        let (_req, _ctx) =
+            proposal.extract_err_req(&internal_error, EXAMPLE_OHTTP_RELAY.to_owned())?;
         Ok(())
     }
 
