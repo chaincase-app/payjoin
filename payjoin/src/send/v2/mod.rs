@@ -29,7 +29,9 @@ use url::Url;
 
 use super::error::BuildSenderError;
 use super::*;
-use crate::hpke::{decrypt_message_b, encrypt_message_a, HpkeSecretKey};
+use crate::hpke::{
+    decrypt_message_b, encrypt_message_a, HpkeError, HpkeSecretKey, PADDED_PLAINTEXT_A_LENGTH,
+};
 use crate::ohttp::{ohttp_decapsulate, ohttp_encapsulate};
 use crate::send::v1;
 use crate::uri::{ShortId, UrlExt};
@@ -149,15 +151,22 @@ impl Sender {
         }
         let rs = self.extract_rs_pubkey()?;
         let url = self.v1.endpoint.clone();
-        let body = serialize_v2_body(
+        let mut plaintext = serialize_v2_body(
             &self.v1.psbt,
             self.v1.disable_output_substitution,
             self.v1.fee_contribution,
             self.v1.min_fee_rate,
         )?;
+        plaintext.resize(PADDED_PLAINTEXT_A_LENGTH, 0);
+
         let hpke_ctx = HpkeContext::new(rs, &self.reply_key);
         let body = encrypt_message_a(
-            body,
+            &plaintext.clone().try_into().map_err(|_| {
+                InternalCreateRequestError::Hpke(HpkeError::PayloadTooLarge {
+                    actual: plaintext.len(),
+                    max: PADDED_PLAINTEXT_A_LENGTH,
+                })
+            })?,
             &hpke_ctx.reply_pair.public_key().clone(),
             &hpke_ctx.receiver.clone(),
         )
@@ -265,7 +274,7 @@ impl V2GetContext {
             .join(&subdir.to_string())
             .map_err(|e| InternalCreateRequestError::Url(e.into()))?;
         let body = encrypt_message_a(
-            Vec::new(),
+            &[0; PADDED_PLAINTEXT_A_LENGTH],
             &self.hpke_ctx.reply_pair.public_key().clone(),
             &self.hpke_ctx.receiver.clone(),
         )
