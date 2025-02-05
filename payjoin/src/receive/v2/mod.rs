@@ -373,9 +373,9 @@ impl WantsOutputs {
     pub fn substitute_receiver_script(
         self,
         output_script: &Script,
-    ) -> Result<WantsOutputs, OutputSubstitutionError> {
+    ) -> Result<Self, OutputSubstitutionError> {
         let inner = self.v1.substitute_receiver_script(output_script)?;
-        Ok(WantsOutputs { v1: inner, context: self.context })
+        Ok(Self { v1: inner, context: self.context })
     }
 
     /// Replace **all** receiver outputs with one or more provided outputs.
@@ -383,13 +383,13 @@ impl WantsOutputs {
     /// that address must be included in `replacement_outputs`. The value of that output may be
     /// increased or decreased depending on the receiver's input contributions and whether the
     /// receiver needs to pay for additional miner fees (e.g. in the case of adding many outputs).
-    pub fn replace_receiver_outputs(
+    pub fn replace_receiver_outputs<'a>(
         self,
-        replacement_outputs: Vec<TxOut>,
+        replacement_outputs: impl Iterator<Item = &'a TxOut>,
         drain_script: &Script,
-    ) -> Result<WantsOutputs, OutputSubstitutionError> {
+    ) -> Result<Self, OutputSubstitutionError> {
         let inner = self.v1.replace_receiver_outputs(replacement_outputs, drain_script)?;
-        Ok(WantsOutputs { v1: inner, context: self.context })
+        Ok(Self { v1: inner, context: self.context })
     }
 
     /// Proceed to the input contribution step.
