@@ -78,6 +78,11 @@ impl TestServices {
         Url::parse(&format!("http://localhost:{}", self.ohttp_relay.0)).expect("invalid URL")
     }
 
+    pub fn ohttp_gateway_url(&self) -> Url {
+        let url = self.directory_url();
+        url.join("/.well-known/ohttp-gateway").expect("invalid URL")
+    }
+
     pub fn take_ohttp_relay_handle(&mut self) -> JoinHandle<Result<(), BoxSendSyncError>> {
         self.ohttp_relay.1.take().expect("ohttp relay handle not found")
     }
