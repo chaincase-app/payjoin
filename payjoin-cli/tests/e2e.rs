@@ -184,7 +184,7 @@ mod e2e {
 
             let directory = &services.directory_url().to_string();
             // Mock ohttp_relay since the ohttp_relay's http client doesn't have the certificate for the directory
-            let mock_ohttp_relay = directory;
+            let mock_ohttp_relay = &services.ohttp_gateway_url().to_string();
 
             let cli_receive_initiator = Command::new(payjoin_cli)
                 .arg("--rpchost")

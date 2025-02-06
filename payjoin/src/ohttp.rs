@@ -41,7 +41,7 @@ pub fn ohttp_encapsulate(
     }
 
     let mut bhttp_req = [0u8; PADDED_BHTTP_REQ_BYTES];
-    let _ = bhttp_message.write_bhttp(bhttp::Mode::KnownLength, &mut bhttp_req.as_mut_slice());
+    let _ = bhttp_message.write_bhttp(bhttp::Mode::KnownLength, &mut bhttp_req.as_mut_slice())?;
     let (encapsulated, ohttp_ctx) = ctx.encapsulate(&bhttp_req)?;
 
     let mut buffer = [0u8; ENCAPSULATED_MESSAGE_BYTES];
