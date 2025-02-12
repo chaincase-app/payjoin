@@ -371,14 +371,9 @@ impl App {
             .map_err(|e| Implementation(e.into()))?
             .commit_outputs();
 
-        let provisional_payjoin = match try_contributing_inputs(payjoin.clone(), &bitcoind) {
-            Ok(proposal) => proposal,
-            Err(e) => {
-                log::warn!("Failed to contribute inputs: {}", e);
-                payjoin
-            }
-        }
-        .commit_inputs();
+        let provisional_payjoin = try_contributing_inputs(payjoin.clone(), &bitcoind)
+            .map_err(|e| ReplyableError::Implementation(e.into()))?
+            .commit_inputs();
 
         let payjoin_proposal = provisional_payjoin.finalize_proposal(
             |psbt: &Psbt| {
@@ -397,21 +392,17 @@ impl App {
 fn try_contributing_inputs(
     payjoin: payjoin::receive::v1::WantsInputs,
     bitcoind: &bitcoincore_rpc::Client,
-) -> Result<payjoin::receive::v1::WantsInputs> {
+) -> Result<payjoin::receive::v1::WantsInputs, ImplementationError> {
     let candidate_inputs = bitcoind
         .list_unspent(None, None, None, None, None)
-        .context("Failed to list unspent from bitcoind")?
+        .map_err(ImplementationError::from)?
         .into_iter()
         .map(input_pair_from_list_unspent);
 
-    payjoin
-        .try_preserving_privacy(candidate_inputs)
-        .map_err(|e| anyhow!("Failed to make privacy preserving selection: {}", e))
-        .map(|selected_input| {
-            payjoin
-                .contribute_inputs(vec![selected_input])
-                .expect("This shouldn't happen. Failed to contribute inputs.")
-        })
+    let selected_input =
+        payjoin.try_preserving_privacy(candidate_inputs).map_err(ImplementationError::from)?;
+
+    payjoin.contribute_inputs(vec![selected_input]).map_err(ImplementationError::from)
 }
 
 fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
