@@ -99,6 +99,7 @@ impl AppTrait for App {
         Ok(())
     }
 
+    #[allow(clippy::incompatible_msrv)]
     async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
         let pj_uri_string = self.construct_payjoin_uri(amount, None)?;
         println!(

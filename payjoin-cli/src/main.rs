@@ -15,17 +15,29 @@ async fn main() -> Result<()> {
 
     let matches = cli();
     let config = Config::new(&matches)?;
-    let app: Box<dyn AppTrait> = {
+
+    let app: Box<dyn AppTrait> = if matches.get_flag("bip78") {
+        #[cfg(feature = "v1")]
+        {
+            Box::new(crate::app::v1::App::new(config)?)
+        }
+        #[cfg(not(feature = "v1"))]
+        {
+            anyhow::bail!(
+                "BIP78 (v1) support is not enabled in this build. Recompile with --features v1"
+            )
+        }
+    } else {
         #[cfg(feature = "v2")]
         {
             Box::new(crate::app::v2::App::new(config)?)
         }
-        #[cfg(all(feature = "v1", not(feature = "v2")))]
+        #[cfg(not(feature = "v2"))]
         {
-            Box::new(crate::app::v1::App::new(config)?)
+            anyhow::bail!(
+                "BIP77 (v2) support is not enabled in this build. Recompile with --features v2"
+            )
         }
-        #[cfg(not(any(feature = "v1", feature = "v2")))]
-        compile_error!("Either feature \"v1\" or \"v2\" must be enabled");
     };
 
     match matches.subcommand() {
@@ -43,6 +55,9 @@ async fn main() -> Result<()> {
         }
         #[cfg(feature = "v2")]
         Some(("resume", _)) => {
+            if matches.get_flag("bip78") {
+                anyhow::bail!("Resume command is only available with BIP77 (v2)");
+            }
             println!("resume");
             app.resume_payjoins().await?;
         }
@@ -56,6 +71,20 @@ fn cli() -> ArgMatches {
     let mut cmd = Command::new("payjoin")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Payjoin - bitcoin scaling, savings, and privacy by default")
+        .arg(
+            Arg::new("bip77")
+                .long("bip77")
+                .help("Use BIP77 (v2) protocol (default)")
+                .conflicts_with("bip78")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("bip78")
+                .long("bip78")
+                .help("Use BIP78 (v1) protocol")
+                .conflicts_with("bip77")
+                .action(clap::ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("rpchost")
                 .long("rpchost")
@@ -127,7 +156,7 @@ fn cli() -> ArgMatches {
             .help("The maximum effective fee rate the receiver is willing to pay (in sat/vB)")
             .value_parser(parse_fee_rate_in_sat_per_vb),
     );
-    #[cfg(not(feature = "v2"))]
+    #[cfg(feature = "v1")]
     {
         receive_cmd = receive_cmd.arg(
             Arg::new("port")
