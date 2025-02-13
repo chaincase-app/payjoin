@@ -337,6 +337,17 @@ impl fmt::Display for SelectionError {
     }
 }
 
+impl error::Error for SelectionError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        use InternalSelectionError::*;
+
+        match &self.0 {
+            Empty => None,
+            TooManyOutputs => None,
+            NotFound => None,
+        }
+    }
+}
 impl From<InternalSelectionError> for SelectionError {
     fn from(value: InternalSelectionError) -> Self { SelectionError(value) }
 }
@@ -359,6 +370,14 @@ impl fmt::Display for InputContributionError {
         match &self.0 {
             InternalInputContributionError::ValueTooLow =>
                 write!(f, "Total input value is not enough to cover additional output value"),
+        }
+    }
+}
+
+impl error::Error for InputContributionError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match &self.0 {
+            InternalInputContributionError::ValueTooLow => None,
         }
     }
 }

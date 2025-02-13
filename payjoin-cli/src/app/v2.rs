@@ -304,10 +304,8 @@ impl App {
             .commit_outputs();
 
         let provisional_payjoin = try_contributing_inputs(payjoin.clone(), &bitcoind)
-            .unwrap_or_else(|e| {
-                log::warn!("Failed to contribute inputs: {}", e);
-                payjoin.commit_inputs()
-            });
+            .map_err(ReplyableError::Implementation)?
+            .commit_inputs();
 
         let payjoin_proposal = provisional_payjoin.finalize_proposal(
             |psbt: &Psbt| {
@@ -355,21 +353,17 @@ async fn handle_recoverable_error(
 fn try_contributing_inputs(
     payjoin: payjoin::receive::v2::WantsInputs,
     bitcoind: &bitcoincore_rpc::Client,
-) -> Result<payjoin::receive::v2::ProvisionalProposal> {
+) -> Result<payjoin::receive::v2::WantsInputs, ImplementationError> {
     let candidate_inputs = bitcoind
         .list_unspent(None, None, None, None, None)
-        .context("Failed to list unspent from bitcoind")?
+        .map_err(ImplementationError::from)?
         .into_iter()
         .map(input_pair_from_list_unspent);
-    let selected_input = payjoin
-        .try_preserving_privacy(candidate_inputs)
-        .map_err(|e| anyhow!("Failed to make privacy preserving selection: {}", e))?;
-    log::debug!("selected input: {:#?}", selected_input);
 
-    Ok(payjoin
-        .contribute_inputs(vec![selected_input])
-        .expect("This shouldn't happen. Failed to contribute inputs.")
-        .commit_inputs())
+    let selected_input =
+        payjoin.try_preserving_privacy(candidate_inputs).map_err(ImplementationError::from)?;
+
+    payjoin.contribute_inputs(vec![selected_input]).map_err(ImplementationError::from)
 }
 
 async fn unwrap_ohttp_keys_or_else_fetch(config: &AppConfig) -> Result<payjoin::OhttpKeys> {
