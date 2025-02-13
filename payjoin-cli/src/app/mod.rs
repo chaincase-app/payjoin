@@ -14,7 +14,7 @@ use tokio::signal;
 use tokio::sync::watch;
 
 pub mod config;
-use crate::app::config::AppConfig;
+use crate::app::config::Config;
 
 #[cfg(feature = "v1")]
 pub(crate) mod v1;
@@ -26,7 +26,7 @@ pub const LOCAL_CERT_FILE: &str = "localhost.der";
 
 #[async_trait::async_trait]
 pub trait App {
-    fn new(config: AppConfig) -> Result<Self>
+    fn new(config: Config) -> Result<Self>
     where
         Self: Sized;
     fn bitcoind(&self) -> Result<bitcoincore_rpc::Client>;

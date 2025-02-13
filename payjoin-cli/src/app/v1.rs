@@ -23,7 +23,7 @@ use payjoin::{Uri, UriExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use super::config::AppConfig;
+use super::config::Config;
 use super::App as AppTrait;
 use crate::app::{handle_interrupt, http_agent, input_pair_from_list_unspent};
 use crate::db::Database;
@@ -39,14 +39,14 @@ impl payjoin::receive::v1::Headers for Headers<'_> {
 
 #[derive(Clone)]
 pub(crate) struct App {
-    config: AppConfig,
+    config: Config,
     db: Arc<Database>,
     interrupt: watch::Receiver<()>,
 }
 
 #[async_trait::async_trait]
 impl AppTrait for App {
-    fn new(config: AppConfig) -> Result<Self> {
+    fn new(config: Config) -> Result<Self> {
         let db = Arc::new(Database::create(&config.db_path)?);
         let (interrupt_tx, interrupt_rx) = watch::channel(());
         tokio::spawn(handle_interrupt(interrupt_tx));

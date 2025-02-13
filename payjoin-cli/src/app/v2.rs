@@ -12,21 +12,21 @@ use payjoin::send::v2::{Sender, SenderBuilder};
 use payjoin::{bitcoin, Uri};
 use tokio::sync::watch;
 
-use super::config::AppConfig;
+use super::config::Config;
 use super::App as AppTrait;
 use crate::app::{handle_interrupt, http_agent, input_pair_from_list_unspent};
 use crate::db::Database;
 
 #[derive(Clone)]
 pub(crate) struct App {
-    config: AppConfig,
+    config: Config,
     db: Arc<Database>,
     interrupt: watch::Receiver<()>,
 }
 
 #[async_trait::async_trait]
 impl AppTrait for App {
-    fn new(config: AppConfig) -> Result<Self> {
+    fn new(config: Config) -> Result<Self> {
         let db = Arc::new(Database::create(&config.db_path)?);
         let (interrupt_tx, interrupt_rx) = watch::channel(());
         tokio::spawn(handle_interrupt(interrupt_tx));
@@ -370,7 +370,7 @@ fn try_contributing_inputs(
         .commit_inputs())
 }
 
-async fn unwrap_ohttp_keys_or_else_fetch(config: &AppConfig) -> Result<payjoin::OhttpKeys> {
+async fn unwrap_ohttp_keys_or_else_fetch(config: &Config) -> Result<payjoin::OhttpKeys> {
     if let Some(keys) = config.v2.ohttp_keys.clone() {
         println!("Using OHTTP Keys from config");
         Ok(keys)
