@@ -113,7 +113,7 @@ impl AppTrait for App {
         Ok(())
     }
 
-    async fn receive_payjoin(self, amount: Amount) -> Result<()> {
+    async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
         let pj_uri_string = self.construct_payjoin_uri(amount, None)?;
         println!(
             "Listening at {}. Configured to accept payjoin at BIP 21 Payjoin Uri:",
@@ -129,6 +129,11 @@ impl AppTrait for App {
             }
         }
         Ok(())
+    }
+
+    #[cfg(feature = "v2")]
+    async fn resume_payjoins(&self) -> Result<()> {
+        unimplemented!("resume_payjoins not implemented for v1");
     }
 }
 
@@ -153,7 +158,7 @@ impl App {
         Ok(pj_uri.to_string())
     }
 
-    async fn start_http_server(self) -> Result<()> {
+    async fn start_http_server(&self) -> Result<()> {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.config.port));
         let listener = TcpListener::bind(addr).await?;
         let app = self.clone();

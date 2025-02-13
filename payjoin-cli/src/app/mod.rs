@@ -31,7 +31,9 @@ pub trait App {
         Self: Sized;
     fn bitcoind(&self) -> Result<bitcoincore_rpc::Client>;
     async fn send_payjoin(&self, bip21: &str, fee_rate: FeeRate) -> Result<()>;
-    async fn receive_payjoin(self, amount: Amount) -> Result<()>;
+    async fn receive_payjoin(&self, amount: Amount) -> Result<()>;
+    #[cfg(feature = "v2")]
+    async fn resume_payjoins(&self) -> Result<()>;
 
     fn create_original_psbt(&self, uri: &PjUri, fee_rate: FeeRate) -> Result<Psbt> {
         let amount = uri.amount.ok_or_else(|| anyhow!("please specify the amount in the Uri"))?;

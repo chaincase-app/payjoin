@@ -9,18 +9,24 @@ use url::Url;
 mod app;
 mod db;
 
-#[cfg(all(not(feature = "v2"), feature = "v1"))]
-use app::v1::App;
-#[cfg(feature = "v2")]
-use app::v2::App;
-
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
 
     let matches = cli();
-    let config = AppConfig::new(&matches).with_context(|| "Failed to parse config")?;
-    let app = App::new(config)?;
+    let config = AppConfig::new(&matches)?;
+    let app: Box<dyn AppTrait> = {
+        #[cfg(feature = "v2")]
+        {
+            Box::new(crate::app::v2::App::new(config)?)
+        }
+        #[cfg(all(feature = "v1", not(feature = "v2")))]
+        {
+            Box::new(crate::app::v1::App::new(config)?)
+        }
+        #[cfg(not(any(feature = "v1", feature = "v2")))]
+        compile_error!("Either feature \"v1\" or \"v2\" must be enabled");
+    };
 
     match matches.subcommand() {
         Some(("send", sub_matches)) => {

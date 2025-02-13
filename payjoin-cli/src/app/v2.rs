@@ -76,13 +76,53 @@ impl AppTrait for App {
         self.spawn_payjoin_sender(req_ctx).await
     }
 
-    async fn receive_payjoin(self, amount: Amount) -> Result<()> {
+    async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
         let address = self.bitcoind()?.get_new_address(None, None)?.assume_checked();
         let ohttp_keys = unwrap_ohttp_keys_or_else_fetch(&self.config).await?;
         let session =
             Receiver::new(address, self.config.pj_directory.clone(), ohttp_keys.clone(), None);
         self.db.insert_recv_session(session.clone())?;
         self.spawn_payjoin_receiver(session, Some(amount)).await
+    }
+
+    #[allow(clippy::incompatible_msrv)]
+    async fn resume_payjoins(&self) -> Result<()> {
+        let recv_sessions = self.db.get_recv_sessions()?;
+        let send_sessions = self.db.get_send_sessions()?;
+
+        if recv_sessions.is_empty() && send_sessions.is_empty() {
+            println!("No sessions to resume.");
+            return Ok(());
+        }
+
+        let mut tasks = Vec::new();
+
+        for session in recv_sessions {
+            let self_clone = self.clone();
+            tasks.push(tokio::spawn(async move {
+                self_clone.spawn_payjoin_receiver(session, None).await
+            }));
+        }
+
+        for session in send_sessions {
+            let self_clone = self.clone();
+            tasks.push(tokio::spawn(async move { self_clone.spawn_payjoin_sender(session).await }));
+        }
+
+        let mut interrupt = self.interrupt.clone();
+        tokio::select! {
+            _ = async {
+                for task in tasks {
+                    let _ = task.await;
+                }
+            } => {
+                println!("All resumed sessions completed.");
+            }
+            _ = interrupt.changed() => {
+                println!("Resumed sessions were interrupted.");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -147,46 +187,6 @@ impl App {
             payjoin_psbt.extract_tx_unchecked_fee_rate().clone().compute_txid()
         );
         self.db.clear_recv_session()?;
-        Ok(())
-    }
-
-    #[allow(clippy::incompatible_msrv)]
-    pub async fn resume_payjoins(&self) -> Result<()> {
-        let recv_sessions = self.db.get_recv_sessions()?;
-        let send_sessions = self.db.get_send_sessions()?;
-
-        if recv_sessions.is_empty() && send_sessions.is_empty() {
-            println!("No sessions to resume.");
-            return Ok(());
-        }
-
-        let mut tasks = Vec::new();
-
-        for session in recv_sessions {
-            let self_clone = self.clone();
-            tasks.push(tokio::spawn(async move {
-                self_clone.spawn_payjoin_receiver(session, None).await
-            }));
-        }
-
-        for session in send_sessions {
-            let self_clone = self.clone();
-            tasks.push(tokio::spawn(async move { self_clone.spawn_payjoin_sender(session).await }));
-        }
-
-        let mut interrupt = self.interrupt.clone();
-        tokio::select! {
-            _ = async {
-                for task in tasks {
-                    let _ = task.await;
-                }
-            } => {
-                println!("All resumed sessions completed.");
-            }
-            _ = interrupt.changed() => {
-                println!("Resumed sessions were interrupted.");
-            }
-        }
         Ok(())
     }
 
