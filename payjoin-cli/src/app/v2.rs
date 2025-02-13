@@ -1,26 +1,26 @@
-use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use bitcoincore_rpc::RpcApi;
 use payjoin::bitcoin::consensus::encode::serialize_hex;
 use payjoin::bitcoin::psbt::Psbt;
 use payjoin::bitcoin::{Amount, FeeRate};
 use payjoin::receive::v2::{Receiver, UncheckedProposal};
-use payjoin::receive::{Error, ImplementationError, ReplyableError};
+use payjoin::receive::{Error, ReplyableError};
 use payjoin::send::v2::{Sender, SenderBuilder};
-use payjoin::{bitcoin, Uri};
+use payjoin::Uri;
 use tokio::sync::watch;
 
 use super::config::Config;
+use super::wallet::BitcoindWallet;
 use super::App as AppTrait;
-use crate::app::{handle_interrupt, http_agent, input_pair_from_list_unspent};
+use crate::app::{handle_interrupt, http_agent};
 use crate::db::Database;
 
 #[derive(Clone)]
 pub(crate) struct App {
     config: Config,
     db: Arc<Database>,
+    wallet: BitcoindWallet,
     interrupt: watch::Receiver<()>,
 }
 
@@ -30,29 +30,15 @@ impl AppTrait for App {
         let db = Arc::new(Database::create(&config.db_path)?);
         let (interrupt_tx, interrupt_rx) = watch::channel(());
         tokio::spawn(handle_interrupt(interrupt_tx));
-        let app = Self { config, db, interrupt: interrupt_rx };
-        app.bitcoind()?
-            .get_blockchain_info()
+        let wallet = BitcoindWallet::new(&config.bitcoind)?;
+        let app = Self { config, db, wallet, interrupt: interrupt_rx };
+        app.wallet()
+            .network()
             .context("Failed to connect to bitcoind. Check config RPC connection.")?;
         Ok(app)
     }
 
-    fn bitcoind(&self) -> Result<bitcoincore_rpc::Client> {
-        match &self.config.bitcoind.cookie {
-            Some(cookie) => bitcoincore_rpc::Client::new(
-                self.config.bitcoind.rpchost.as_str(),
-                bitcoincore_rpc::Auth::CookieFile(cookie.into()),
-            ),
-            None => bitcoincore_rpc::Client::new(
-                self.config.bitcoind.rpchost.as_str(),
-                bitcoincore_rpc::Auth::UserPass(
-                    self.config.bitcoind.rpcuser.clone(),
-                    self.config.bitcoind.rpcpassword.clone(),
-                ),
-            ),
-        }
-        .with_context(|| "Failed to connect to bitcoind")
-    }
+    fn wallet(&self) -> BitcoindWallet { self.wallet.clone() }
 
     async fn send_payjoin(&self, bip21: &str, fee_rate: FeeRate) -> Result<()> {
         use payjoin::UriExt;
@@ -77,7 +63,7 @@ impl AppTrait for App {
     }
 
     async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
-        let address = self.bitcoind()?.get_new_address(None, None)?.assume_checked();
+        let address = self.wallet().get_new_address()?;
         let ohttp_keys = unwrap_ohttp_keys_or_else_fetch(&self.config).await?;
         let session =
             Receiver::new(address, self.config.v2.pj_directory.clone(), ohttp_keys.clone(), None);
@@ -254,38 +240,18 @@ impl App {
         &self,
         proposal: payjoin::receive::v2::UncheckedProposal,
     ) -> Result<payjoin::receive::v2::PayjoinProposal, Error> {
-        let bitcoind = self.bitcoind().map_err(|e| ReplyableError::Implementation(e.into()))?;
+        let wallet = self.wallet();
 
         // in a payment processor where the sender could go offline, this is where you schedule to broadcast the original_tx
         let _to_broadcast_in_failure_case = proposal.extract_tx_to_schedule_broadcast();
 
-        // The network is used for checks later
-        let network = bitcoind
-            .get_blockchain_info()
-            .map_err(|e| ReplyableError::Implementation(e.into()))?
-            .chain;
         // Receive Check 1: Can Broadcast
         let proposal =
-            proposal.check_broadcast_suitability(None, |tx| {
-                let raw_tx = bitcoin::consensus::encode::serialize_hex(&tx);
-                let mempool_results = bitcoind.test_mempool_accept(&[raw_tx])?;
-                match mempool_results.first() {
-                    Some(result) => Ok(result.allowed),
-                    None => Err(ImplementationError::from(
-                        "No mempool results returned on broadcast check",
-                    )),
-                }
-            })?;
+            proposal.check_broadcast_suitability(None, |tx| Ok(wallet.can_broadcast(tx)?))?;
         log::trace!("check1");
 
         // Receive Check 2: receiver can't sign for proposal inputs
-        let proposal = proposal.check_inputs_not_owned(|input| {
-            if let Ok(address) = bitcoin::Address::from_script(input, network) {
-                Ok(bitcoind.get_address_info(&address).map(|info| info.is_mine.unwrap_or(false))?)
-            } else {
-                Ok(false)
-            }
-        })?;
+        let proposal = proposal.check_inputs_not_owned(|input| Ok(wallet.is_mine(input)?))?;
         log::trace!("check2");
 
         // Receive Check 3: have we seen this input before? More of a check for non-interactive i.e. payment processor receivers.
@@ -294,29 +260,17 @@ impl App {
         log::trace!("check3");
 
         let payjoin = payjoin
-            .identify_receiver_outputs(|output_script| {
-                if let Ok(address) = bitcoin::Address::from_script(output_script, network) {
-                    Ok(bitcoind
-                        .get_address_info(&address)
-                        .map(|info| info.is_mine.unwrap_or(false))?)
-                } else {
-                    Ok(false)
-                }
-            })?
+            .identify_receiver_outputs(|output_script| Ok(wallet.is_mine(output_script)?))?
             .commit_outputs();
 
-        let provisional_payjoin = try_contributing_inputs(payjoin.clone(), &bitcoind)
-            .unwrap_or_else(|e| {
+        let provisional_payjoin =
+            try_contributing_inputs(payjoin.clone(), &wallet).unwrap_or_else(|e| {
                 log::warn!("Failed to contribute inputs: {}", e);
                 payjoin.commit_inputs()
             });
 
         let payjoin_proposal = provisional_payjoin.finalize_proposal(
-            |psbt: &Psbt| {
-                let res =
-                    bitcoind.wallet_process_psbt(&psbt.to_string(), None, None, Some(false))?;
-                Ok(Psbt::from_str(&res.psbt)?)
-            },
+            |psbt| Ok(wallet.process_psbt(psbt)?),
             None,
             self.config.max_fee_rate,
         )?;
@@ -356,13 +310,9 @@ async fn handle_recoverable_error(
 
 fn try_contributing_inputs(
     payjoin: payjoin::receive::v2::WantsInputs,
-    bitcoind: &bitcoincore_rpc::Client,
+    wallet: &BitcoindWallet,
 ) -> Result<payjoin::receive::v2::ProvisionalProposal> {
-    let candidate_inputs = bitcoind
-        .list_unspent(None, None, None, None, None)
-        .context("Failed to list unspent from bitcoind")?
-        .into_iter()
-        .map(input_pair_from_list_unspent);
+    let candidate_inputs = wallet.list_unspent()?;
     let selected_input = payjoin
         .try_preserving_privacy(candidate_inputs)
         .map_err(|e| anyhow!("Failed to make privacy preserving selection: {}", e))?;
