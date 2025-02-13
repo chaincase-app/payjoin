@@ -65,8 +65,12 @@ impl AppTrait for App {
     async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
         let address = self.wallet().get_new_address()?;
         let ohttp_keys = unwrap_ohttp_keys_or_else_fetch(&self.config).await?;
-        let session =
-            Receiver::new(address, self.config.v2.pj_directory.clone(), ohttp_keys.clone(), None);
+        let session = Receiver::new(
+            address,
+            self.config.v2()?.pj_directory.clone(),
+            ohttp_keys.clone(),
+            None,
+        );
         self.db.insert_recv_session(session.clone())?;
         self.spawn_payjoin_receiver(session, Some(amount)).await
     }
@@ -155,13 +159,13 @@ impl App {
             Ok(proposal) => proposal,
             Err(Error::ReplyToSender(e)) => {
                 return Err(
-                    handle_recoverable_error(e, receiver, &self.config.v2.ohttp_relay).await
+                    handle_recoverable_error(e, receiver, &self.config.v2()?.ohttp_relay).await
                 );
             }
             Err(e) => return Err(e.into()),
         };
         let (req, ohttp_ctx) = payjoin_proposal
-            .extract_v2_req(&self.config.v2.ohttp_relay)
+            .extract_v2_req(&self.config.v2()?.ohttp_relay)
             .map_err(|e| anyhow!("v2 req extraction failed {}", e))?;
         println!("Got a request from the sender. Responding with a Payjoin proposal.");
         let res = post_request(req).await?;
@@ -178,7 +182,7 @@ impl App {
     }
 
     async fn long_poll_post(&self, req_ctx: &mut Sender) -> Result<Psbt> {
-        match req_ctx.extract_v2(self.config.v2.ohttp_relay.clone()) {
+        match req_ctx.extract_v2(self.config.v2()?.ohttp_relay.clone()) {
             Ok((req, ctx)) => {
                 println!("Posting Original PSBT Payload request...");
                 let response = post_request(req).await?;
@@ -186,7 +190,7 @@ impl App {
                 let v2_ctx = Arc::new(ctx.process_response(&response.bytes().await?)?);
                 loop {
                     let (req, ohttp_ctx) =
-                        v2_ctx.extract_req(self.config.v2.ohttp_relay.clone())?;
+                        v2_ctx.extract_req(self.config.v2()?.ohttp_relay.clone())?;
                     let response = post_request(req).await?;
                     match v2_ctx.process_response(&response.bytes().await?, ohttp_ctx) {
                         Ok(Some(psbt)) => return Ok(psbt),
@@ -223,7 +227,7 @@ impl App {
         session: &mut payjoin::receive::v2::Receiver,
     ) -> Result<payjoin::receive::v2::UncheckedProposal> {
         loop {
-            let (req, context) = session.extract_req(&self.config.v2.ohttp_relay)?;
+            let (req, context) = session.extract_req(&self.config.v2()?.ohttp_relay)?;
             println!("Polling receive request...");
             let ohttp_response = post_request(req).await?;
             let proposal = session
@@ -321,13 +325,13 @@ fn try_contributing_inputs(
 }
 
 async fn unwrap_ohttp_keys_or_else_fetch(config: &Config) -> Result<payjoin::OhttpKeys> {
-    if let Some(keys) = config.v2.ohttp_keys.clone() {
+    if let Some(keys) = config.v2()?.ohttp_keys.clone() {
         println!("Using OHTTP Keys from config");
         Ok(keys)
     } else {
         println!("Bootstrapping private network transport over Oblivious HTTP");
-        let ohttp_relay = config.v2.ohttp_relay.clone();
-        let payjoin_directory = config.v2.pj_directory.clone();
+        let ohttp_relay = config.v2()?.ohttp_relay.clone();
+        let payjoin_directory = config.v2()?.pj_directory.clone();
         #[cfg(feature = "_danger-local-https")]
         let ohttp_keys = {
             let cert_der = crate::app::read_local_cert()?;

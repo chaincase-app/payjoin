@@ -37,24 +37,20 @@ rpcuser = "user"
 # The rpcpassword of the user to connect to (specified in bitcoin.conf).
 rpcpassword = "password"
 
-# Version 1 Settings
-# -----------------
-[v1]
-# (v1, receiver only) The port for v1 receiving servers to bind to.
-port = 3000
+# Version Configuration
+# -------------------
+# Uncomment ONE of the following version configurations depending on which version you want to use
 
-# (v1, receiver only) The payjoin endpoint which coordinates the transaction.
-pj_endpoint = "https://localhost:3000"
+# Version 1 Configuration
+# [v1]
+# port = 3000
+# pj_endpoint = "https://localhost:3000"
 
-# Version 2 Settings
-# -----------------
-[v2]
-# (v2 only) The payjoin directory to rendezvous at.
-pj_directory = "https://payjo.in"
-
-# (v2 only) The OHTTP relay that will forward requests to the OHTTP Gateway, which will forward to the pj_endpoint directory.
-ohttp_relay = "https://pj.bobspacebkk.com"
-
-# (v2 only, optional) The HPKE keys which need to be fetched ahead of time from the pj_endpoint for the payjoin packets to be encrypted.
-# These can now be fetched and no longer need to be configured.
-ohttp_keys = "./path/to/ohttp_keys"
+# Version 2 Configuration
+# [v2]
+# pj_directory = "https://payjo.in"
+# ohttp_relay = "https://pj.bobspacebkk.com"
+# # Optional: The HPKE keys which need to be fetched ahead of time from the pj_endpoint
+# # for the payjoin packets to be encrypted.
+# # These can now be fetched and no longer need to be configured.
+# ohttp_keys = "./path/to/ohttp_keys"

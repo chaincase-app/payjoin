@@ -22,7 +22,7 @@ pub(crate) mod v2;
 pub const LOCAL_CERT_FILE: &str = "localhost.der";
 
 #[async_trait::async_trait]
-pub trait App {
+pub trait App: Send + Sync {
     fn new(config: Config) -> Result<Self>
     where
         Self: Sized;

@@ -100,16 +100,18 @@ impl AppTrait for App {
         Ok(())
     }
 
+    #[allow(clippy::incompatible_msrv)]
     async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
         let pj_uri_string = self.construct_payjoin_uri(amount, None)?;
         println!(
             "Debug - Config: port={}, pj_endpoint={}",
-            self.config.v1.port, self.config.v1.pj_endpoint
+            self.config.v1()?.port,
+            self.config.v1()?.pj_endpoint
         );
         println!("Debug - URI about to be printed: {}", pj_uri_string);
         println!(
             "Listening at {}. Configured to accept payjoin at BIP 21 Payjoin Uri:",
-            self.config.v1.port
+            self.config.v1()?.port
         );
         println!("{}", pj_uri_string);
 
@@ -138,7 +140,7 @@ impl App {
         let pj_receiver_address = self.wallet.get_new_address()?;
         let pj_part = match fallback_target {
             Some(target) => target,
-            None => self.config.v1.pj_endpoint.as_str(),
+            None => self.config.v1()?.pj_endpoint.as_str(),
         };
         let pj_part = payjoin::Url::parse(pj_part)
             .map_err(|e| anyhow!("Failed to parse pj_endpoint: {}", e))?;
@@ -151,7 +153,7 @@ impl App {
     }
 
     async fn start_http_server(&self) -> Result<()> {
-        let addr = SocketAddr::from(([0, 0, 0, 0], self.config.v1.port));
+        let addr = SocketAddr::from(([0, 0, 0, 0], self.config.v1()?.port));
         let listener = TcpListener::bind(addr).await?;
         let app = self.clone();
 
@@ -255,16 +257,17 @@ impl App {
         &self,
         amount: Option<Amount>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, ReplyableError> {
+        let v1_config = self.config.v1().map_err(|e| Implementation(e.into()))?;
         let address = self.wallet.get_new_address().map_err(|e| Implementation(e.into()))?;
         let uri_string = if let Some(amount) = amount {
             format!(
                 "{}?amount={}&pj={}",
                 address.to_qr_uri(),
                 amount.to_btc(),
-                self.config.v1.pj_endpoint
+                v1_config.pj_endpoint
             )
         } else {
-            format!("{}?pj={}", address.to_qr_uri(), self.config.v1.pj_endpoint)
+            format!("{}?pj={}", address.to_qr_uri(), v1_config.pj_endpoint)
         };
         let uri = Uri::try_from(uri_string.clone())
             .map_err(|_| Implementation(anyhow!("Could not parse payjoin URI string.").into()))?;
