@@ -58,16 +58,16 @@ impl AppTrait for App {
     }
 
     fn bitcoind(&self) -> Result<bitcoincore_rpc::Client> {
-        match &self.config.bitcoind_cookie {
+        match &self.config.bitcoind.cookie {
             Some(cookie) => bitcoincore_rpc::Client::new(
-                self.config.bitcoind_rpchost.as_str(),
+                self.config.bitcoind.rpchost.as_str(),
                 bitcoincore_rpc::Auth::CookieFile(cookie.into()),
             ),
             None => bitcoincore_rpc::Client::new(
-                self.config.bitcoind_rpchost.as_str(),
+                self.config.bitcoind.rpchost.as_str(),
                 bitcoincore_rpc::Auth::UserPass(
-                    self.config.bitcoind_rpcuser.clone(),
-                    self.config.bitcoind_rpcpassword.clone(),
+                    self.config.bitcoind.rpcuser.clone(),
+                    self.config.bitcoind.rpcpassword.clone(),
                 ),
             ),
         }
@@ -116,8 +116,13 @@ impl AppTrait for App {
     async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
         let pj_uri_string = self.construct_payjoin_uri(amount, None)?;
         println!(
+            "Debug - Config: port={}, pj_endpoint={}",
+            self.config.v1.port, self.config.v1.pj_endpoint
+        );
+        println!("Debug - URI about to be printed: {}", pj_uri_string);
+        println!(
             "Listening at {}. Configured to accept payjoin at BIP 21 Payjoin Uri:",
-            self.config.port
+            self.config.v1.port
         );
         println!("{}", pj_uri_string);
 
@@ -146,7 +151,7 @@ impl App {
         let pj_receiver_address = self.bitcoind()?.get_new_address(None, None)?.assume_checked();
         let pj_part = match fallback_target {
             Some(target) => target,
-            None => self.config.pj_endpoint.as_str(),
+            None => self.config.v1.pj_endpoint.as_str(),
         };
         let pj_part = payjoin::Url::parse(pj_part)
             .map_err(|e| anyhow!("Failed to parse pj_endpoint: {}", e))?;
@@ -159,7 +164,7 @@ impl App {
     }
 
     async fn start_http_server(&self) -> Result<()> {
-        let addr = SocketAddr::from(([0, 0, 0, 0], self.config.port));
+        let addr = SocketAddr::from(([0, 0, 0, 0], self.config.v1.port));
         let listener = TcpListener::bind(addr).await?;
         let app = self.clone();
 
@@ -274,10 +279,10 @@ impl App {
                 "{}?amount={}&pj={}",
                 address.to_qr_uri(),
                 amount.to_btc(),
-                self.config.pj_endpoint
+                self.config.v1.pj_endpoint
             )
         } else {
-            format!("{}?pj={}", address.to_qr_uri(), self.config.pj_endpoint)
+            format!("{}?pj={}", address.to_qr_uri(), self.config.v1.pj_endpoint)
         };
         let uri = Uri::try_from(uri_string.clone())
             .map_err(|_| Implementation(anyhow!("Could not parse payjoin URI string.").into()))?;

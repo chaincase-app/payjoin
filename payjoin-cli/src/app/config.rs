@@ -10,72 +10,87 @@ use url::Url;
 use crate::db;
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct AppConfig {
-    pub bitcoind_rpchost: Url,
-    pub bitcoind_cookie: Option<PathBuf>,
-    pub bitcoind_rpcuser: String,
-    pub bitcoind_rpcpassword: String,
-    pub db_path: PathBuf,
-    // receive-only
-    pub max_fee_rate: Option<FeeRate>,
+pub struct BitcoindConfig {
+    pub rpchost: Url,
+    pub cookie: Option<PathBuf>,
+    pub rpcuser: String,
+    pub rpcpassword: String,
+}
 
-    // v2 only
-    #[cfg(feature = "v2")]
+#[cfg(feature = "v1")]
+#[derive(Debug, Clone, Deserialize)]
+pub struct V1Config {
+    pub port: u16,
+    pub pj_endpoint: Url,
+}
+
+#[cfg(feature = "v2")]
+#[derive(Debug, Clone, Deserialize)]
+pub struct V2Config {
     #[serde(deserialize_with = "deserialize_ohttp_keys_from_path")]
     pub ohttp_keys: Option<payjoin::OhttpKeys>,
-    #[cfg(feature = "v2")]
     pub ohttp_relay: Url,
-    #[cfg(feature = "v2")]
     pub pj_directory: Url,
+}
 
-    // v1 receive-only
-    #[cfg(not(feature = "v2"))]
-    pub port: u16,
-    #[cfg(not(feature = "v2"))]
-    pub pj_endpoint: Url,
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppConfig {
+    pub db_path: PathBuf,
+    pub max_fee_rate: Option<FeeRate>,
+    pub bitcoind: BitcoindConfig,
+    #[cfg(feature = "v1")]
+    pub v1: V1Config,
+    #[cfg(feature = "v2")]
+    pub v2: V2Config,
 }
 
 impl AppConfig {
     pub(crate) fn new(matches: &ArgMatches) -> Result<Self, ConfigError> {
         let builder = Config::builder()
-            .set_default("bitcoind_rpchost", "http://localhost:18443")?
+            // BitcoindConfig defaults
+            .set_default("bitcoind.rpchost", "http://localhost:18443")?
             .set_override_option(
-                "bitcoind_rpchost",
+                "bitcoind.rpchost",
                 matches.get_one::<Url>("rpchost").map(|s| s.as_str()),
             )?
-            .set_default("bitcoind_cookie", None::<String>)?
+            .set_default("bitcoind.cookie", None::<String>)?
             .set_override_option(
-                "bitcoind_cookie",
+                "bitcoind.cookie",
                 matches.get_one::<String>("cookie_file").map(|s| s.as_str()),
             )?
-            .set_default("bitcoind_rpcuser", "bitcoin")?
+            .set_default("bitcoind.rpcuser", "bitcoin")?
             .set_override_option(
-                "bitcoind_rpcuser",
+                "bitcoind.rpcuser",
                 matches.get_one::<String>("rpcuser").map(|s| s.as_str()),
             )?
-            .set_default("bitcoind_rpcpassword", "")?
+            .set_default("bitcoind.rpcpassword", "")?
             .set_override_option(
-                "bitcoind_rpcpassword",
+                "bitcoind.rpcpassword",
                 matches.get_one::<String>("rpcpassword").map(|s| s.as_str()),
             )?
+            // Common defaults
             .set_default("db_path", db::DB_PATH)?
             .set_override_option(
                 "db_path",
                 matches.get_one::<String>("db_path").map(|s| s.as_str()),
             )?
-            // Subcommand defaults without which file serialization fails.
-            .set_default("port", "3000")?
-            .set_default("pj_endpoint", "https://localhost:3000")?
             .add_source(File::new("config.toml", FileFormat::Toml).required(false));
 
+        // Add V1Config defaults when not using V2
+        #[cfg(feature = "v1")]
+        let builder = builder
+            .set_default("v1.port", 3000_u16)?
+            .set_default("v1.pj_endpoint", "https://localhost:3000")?;
+
+        // Add V2Config defaults when using V2
         #[cfg(feature = "v2")]
         let builder = builder
             .set_override_option(
-                "ohttp_relay",
+                "v2.ohttp_relay",
                 matches.get_one::<Url>("ohttp_relay").map(|s| s.as_str()),
             )?
-            .set_default("pj_directory", "https://payjo.in")?
-            .set_default("ohttp_keys", None::<String>)?;
+            .set_default("v2.pj_directory", "https://payjo.in")?
+            .set_default("v2.ohttp_keys", None::<String>)?;
 
         let builder = match matches.subcommand() {
             Some(("send", _)) => builder,
@@ -89,8 +104,8 @@ impl AppConfig {
                         .map_err(|_| {
                             ConfigError::Message("\"port\" must be a valid number".to_string())
                         })?;
-                    builder.set_override_option("port", port)?.set_override_option(
-                        "pj_endpoint",
+                    builder.set_override_option("v1.port", port)?.set_override_option(
+                        "v1.pj_endpoint",
                         matches.get_one::<Url>("pj_endpoint").map(|s| s.as_str()),
                     )?
                 };
@@ -99,11 +114,11 @@ impl AppConfig {
                 let builder = {
                     builder
                         .set_override_option(
-                            "pj_directory",
+                            "v2.pj_directory",
                             matches.get_one::<Url>("pj_directory").map(|s| s.as_str()),
                         )?
                         .set_override_option(
-                            "ohttp_keys",
+                            "v2.ohttp_keys",
                             matches.get_one::<String>("ohttp_keys").map(|s| s.as_str()),
                         )?
                 };
