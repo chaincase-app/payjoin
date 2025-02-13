@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use app::config::AppConfig;
+use app::config::Config;
 use app::App as AppTrait;
 use clap::{arg, value_parser, Arg, ArgMatches, Command};
 use payjoin::bitcoin::amount::ParseAmountError;
@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let matches = cli();
-    let config = AppConfig::new(&matches)?;
+    let config = Config::new(&matches)?;
     let app: Box<dyn AppTrait> = {
         #[cfg(feature = "v2")]
         {

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::ArgMatches;
-use config::{Config, ConfigError, File, FileFormat};
+use config::{ConfigError, File, FileFormat};
 use payjoin::bitcoin::FeeRate;
 use serde::Deserialize;
 use url::Url;
@@ -34,7 +34,7 @@ pub struct V2Config {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct AppConfig {
+pub struct Config {
     pub db_path: PathBuf,
     pub max_fee_rate: Option<FeeRate>,
     pub bitcoind: BitcoindConfig,
@@ -44,9 +44,9 @@ pub struct AppConfig {
     pub v2: V2Config,
 }
 
-impl AppConfig {
+impl Config {
     pub(crate) fn new(matches: &ArgMatches) -> Result<Self, ConfigError> {
-        let builder = Config::builder()
+        let builder = config::Config::builder()
             // BitcoindConfig defaults
             .set_default("bitcoind.rpchost", "http://localhost:18443")?
             .set_override_option(
@@ -132,7 +132,7 @@ impl AppConfig {
         };
 
         let config = builder.build()?;
-        let app_config: AppConfig = config.try_deserialize()?;
+        let app_config: Config = config.try_deserialize()?;
         log::debug!("App config: {:?}", app_config);
         Ok(app_config)
     }
