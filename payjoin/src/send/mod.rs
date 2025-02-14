@@ -35,6 +35,9 @@ pub(crate) mod v1;
 #[cfg_attr(docsrs, doc(cfg(feature = "v2")))]
 pub mod v2;
 
+#[cfg(feature = "multi-party")]
+pub mod multi_party;
+
 type InternalResult<T> = Result<T, InternalProposalError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +55,8 @@ pub struct PsbtContext {
     fee_contribution: Option<AdditionalFeeContribution>,
     min_fee_rate: FeeRate,
     payee: ScriptBuf,
+    #[cfg(feature = "multi-party")]
+    opt_in_to_optimistic_merge: bool,
 }
 
 macro_rules! check_eq {
@@ -76,9 +81,17 @@ impl PsbtContext {
     fn process_proposal(self, mut proposal: Psbt) -> InternalResult<Psbt> {
         self.basic_checks(&proposal)?;
         self.check_inputs(&proposal)?;
+        #[cfg(feature = "multi-party")]
+        #[allow(unused_variables)]
         let contributed_fee = self.check_outputs(&proposal)?;
         self.restore_original_utxos(&mut proposal)?;
-        self.check_fees(&proposal, contributed_fee)?;
+
+        #[cfg(feature = "multi-party")]
+        if !self.opt_in_to_optimistic_merge {
+            // TODO: multi-party sender protocol will need its own `check_fees` implementation
+            // as some of the inputs will be missing witness_utxo or non_witness_utxo field in the psbt
+            self.check_fees(&proposal, contributed_fee)?;
+        }
         Ok(proposal)
     }
 
@@ -176,17 +189,22 @@ impl PsbtContext {
                         .next()
                         .ok_or(InternalProposalError::NoInputs)?;
                     // Verify the PSBT input is finalized
-                    ensure!(
-                        proposed.psbtin.final_script_sig.is_some()
-                            || proposed.psbtin.final_script_witness.is_some(),
-                        ReceiverTxinNotFinalized
-                    );
-                    // Verify that non_witness_utxo or witness_utxo are filled in.
-                    ensure!(
-                        proposed.psbtin.witness_utxo.is_some()
-                            || proposed.psbtin.non_witness_utxo.is_some(),
-                        ReceiverTxinMissingUtxoInfo
-                    );
+                    // Note: in a multi-party sender protocol other sender's inputs will not be finalized at this point
+                    #[cfg(feature = "multi-party")]
+                    if !self.opt_in_to_optimistic_merge {
+                        ensure!(
+                            proposed.psbtin.final_script_sig.is_some()
+                                || proposed.psbtin.final_script_witness.is_some(),
+                            ReceiverTxinNotFinalized
+                        );
+
+                        // Verify that non_witness_utxo or witness_utxo are filled in.
+                        ensure!(
+                            proposed.psbtin.witness_utxo.is_some()
+                                || proposed.psbtin.non_witness_utxo.is_some(),
+                            ReceiverTxinMissingUtxoInfo
+                        );
+                    }
                     ensure!(proposed.txin.sequence == original.txin.sequence, MixedSequence);
                 }
             }
@@ -415,6 +433,7 @@ fn serialize_url(
     fee_contribution: Option<AdditionalFeeContribution>,
     min_fee_rate: FeeRate,
     version: &str,
+    opt_in_to_optimistic_merge: bool,
 ) -> Result<Url, url::ParseError> {
     let mut url = endpoint;
     url.query_pairs_mut().append_pair("v", version);
@@ -425,6 +444,9 @@ fn serialize_url(
         url.query_pairs_mut()
             .append_pair("additionalfeeoutputindex", &vout.to_string())
             .append_pair("maxadditionalfeecontribution", &max_amount.to_sat().to_string());
+    }
+    if opt_in_to_optimistic_merge {
+        url.query_pairs_mut().append_pair("optimisticmerge", "true");
     }
     if min_fee_rate > FeeRate::ZERO {
         // TODO serialize in rust-bitcoin <https://github.com/rust-bitcoin/rust-bitcoin/pull/1787/files#diff-c2ea40075e93ccd068673873166cfa3312ec7439d6bc5a4cbc03e972c7e045c4>
@@ -462,6 +484,8 @@ pub(crate) mod test {
             }),
             min_fee_rate: FeeRate::ZERO,
             payee,
+            #[cfg(feature = "multi-party")]
+            opt_in_to_optimistic_merge: false,
         }
     }
 
@@ -505,14 +529,51 @@ pub(crate) mod test {
 
     #[test]
     fn test_disable_output_substitution_query_param() {
-        let url =
-            serialize_url(Url::parse("http://localhost").unwrap(), true, None, FeeRate::ZERO, "2")
-                .unwrap();
+        let url = serialize_url(
+            Url::parse("http://localhost").unwrap(),
+            true,
+            None,
+            FeeRate::ZERO,
+            "2",
+            false,
+        )
+        .unwrap();
         assert_eq!(url, Url::parse("http://localhost?v=2&disableoutputsubstitution=true").unwrap());
 
-        let url =
-            serialize_url(Url::parse("http://localhost").unwrap(), false, None, FeeRate::ZERO, "2")
-                .unwrap();
+        let url = serialize_url(
+            Url::parse("http://localhost").unwrap(),
+            false,
+            None,
+            FeeRate::ZERO,
+            "2",
+            false,
+        )
+        .unwrap();
+        assert_eq!(url, Url::parse("http://localhost?v=2").unwrap());
+    }
+
+    #[test]
+    fn test_optimistic_merge_query_param() {
+        let url = serialize_url(
+            Url::parse("http://localhost").unwrap(),
+            false,
+            None,
+            FeeRate::ZERO,
+            "2",
+            true,
+        )
+        .unwrap();
+        assert_eq!(url, Url::parse("http://localhost?v=2&optimisticmerge=true").unwrap());
+
+        let url = serialize_url(
+            Url::parse("http://localhost").unwrap(),
+            false,
+            None,
+            FeeRate::ZERO,
+            "2",
+            false,
+        )
+        .unwrap();
         assert_eq!(url, Url::parse("http://localhost?v=2").unwrap());
     }
 }

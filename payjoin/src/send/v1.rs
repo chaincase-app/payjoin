@@ -233,7 +233,8 @@ impl Sender {
             self.disable_output_substitution,
             self.fee_contribution,
             self.min_fee_rate,
-            "1", // payjoin version
+            "1",   // payjoin version
+            false, // Opt into optimistic multiparty payjoin
         )?;
         let body = self.psbt.to_string().as_bytes().to_vec();
         Ok((
@@ -245,6 +246,8 @@ impl Sender {
                     fee_contribution: self.fee_contribution,
                     payee: self.payee.clone(),
                     min_fee_rate: self.min_fee_rate,
+                    #[cfg(feature = "multi-party")]
+                    opt_in_to_optimistic_merge: false, // Opt in optimistic merge is not supported in v1
                 },
             },
         ))

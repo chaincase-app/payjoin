@@ -26,6 +26,7 @@ v2 = ["_core", "bitcoin/serde", "hpke", "dep:http", "bhttp", "ohttp", "serde", "
 #[doc = "Functions to fetch OHTTP keys via CONNECT proxy using reqwest. Enables `v2` since only `v2` uses OHTTP."]
 io = ["v2", "reqwest/rustls-tls"]
 _danger-local-https = ["reqwest/rustls-tls", "rustls"]
+multi-party = ["v2", "psbt-merge"]
 
 [dependencies]
 bitcoin = { version = "0.32.5", features = ["base64"] }
