@@ -272,10 +272,10 @@ impl WantsOutputs {
     pub fn substitute_receiver_script(
         self,
         output_script: &Script,
-    ) -> Result<WantsOutputs, OutputSubstitutionError> {
+    ) -> Result<Self, OutputSubstitutionError> {
         let output_value = self.original_psbt.unsigned_tx.output[self.change_vout].value;
-        let outputs = vec![TxOut { value: output_value, script_pubkey: output_script.into() }];
-        self.replace_receiver_outputs(outputs, output_script)
+        let outputs = [TxOut { value: output_value, script_pubkey: output_script.into() }];
+        self.replace_receiver_outputs(outputs.iter(), output_script)
     }
 
     /// Replace **all** receiver outputs with one or more provided outputs.
@@ -283,14 +283,14 @@ impl WantsOutputs {
     /// that address must be included in `replacement_outputs`. The value of that output may be
     /// increased or decreased depending on the receiver's input contributions and whether the
     /// receiver needs to pay for additional miner fees (e.g. in the case of adding many outputs).
-    pub fn replace_receiver_outputs(
+    pub fn replace_receiver_outputs<'a>(
         self,
-        replacement_outputs: Vec<TxOut>,
+        replacement_outputs: impl Iterator<Item = &'a TxOut>,
         drain_script: &Script,
-    ) -> Result<WantsOutputs, OutputSubstitutionError> {
+    ) -> Result<Self, OutputSubstitutionError> {
         let mut payjoin_psbt = self.original_psbt.clone();
         let mut outputs = vec![];
-        let mut replacement_outputs = replacement_outputs.clone();
+        let mut replacement_outputs: Vec<TxOut> = replacement_outputs.cloned().collect();
         let mut rng = rand::thread_rng();
         // Substitute the existing receiver outputs, keeping the sender/receiver output ordering
         for (i, original_output) in self.original_psbt.unsigned_tx.output.iter().enumerate() {
@@ -345,7 +345,7 @@ impl WantsOutputs {
         // Update the payjoin PSBT outputs
         payjoin_psbt.outputs = vec![Default::default(); outputs.len()];
         payjoin_psbt.unsigned_tx.output = outputs;
-        Ok(WantsOutputs {
+        Ok(Self {
             original_psbt: self.original_psbt,
             payjoin_psbt,
             params: self.params,
