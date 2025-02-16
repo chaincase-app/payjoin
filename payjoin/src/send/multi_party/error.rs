@@ -6,7 +6,7 @@ use crate::hpke::HpkeError;
 use crate::ohttp::OhttpEncapsulationError;
 use crate::receive::ImplementationError;
 use crate::send::InternalProposalError;
-use crate::uri::url_ext::{ParseOhttpKeysParamError, ParseReceiverPubkeyParamError};
+use crate::uri::url_ext::ParseReceiverPubkeyParamError;
 
 #[derive(Debug)]
 pub struct CreateRequestError(InternalCreateRequestError);
@@ -16,10 +16,9 @@ pub(crate) enum InternalCreateRequestError {
     #[allow(dead_code)]
     Expired(std::time::SystemTime),
     MissingOhttpConfig,
-    OhttpEncapsulation(OhttpEncapsulationError),
-    Hpke(HpkeError),
     ParseReceiverPubkeyParam(ParseReceiverPubkeyParamError),
     Url(url::ParseError),
+    V2CreateRequest(crate::send::v2::CreateRequestError),
 }
 
 impl From<InternalCreateRequestError> for CreateRequestError {
@@ -35,10 +34,9 @@ impl std::error::Error for CreateRequestError {
         match &self.0 {
             InternalCreateRequestError::Expired(_) => None,
             InternalCreateRequestError::MissingOhttpConfig => None,
-            InternalCreateRequestError::OhttpEncapsulation(e) => Some(e),
-            InternalCreateRequestError::Hpke(e) => Some(e),
             InternalCreateRequestError::ParseReceiverPubkeyParam(e) => Some(e),
             InternalCreateRequestError::Url(e) => Some(e),
+            InternalCreateRequestError::V2CreateRequest(e) => Some(e),
         }
     }
 }
@@ -48,10 +46,7 @@ pub struct FinalizedError(InternalFinalizedError);
 
 #[derive(Debug)]
 pub(crate) enum InternalFinalizedError {
-    CreateRequest(CreateRequestError),
-    Encapsulation(OhttpEncapsulationError),
     Hpke(HpkeError),
-    ParseOhttp(ParseOhttpKeysParamError),
     InvalidSize,
     FinalizePsbt(ImplementationError),
     MissingResponse,
@@ -59,6 +54,7 @@ pub(crate) enum InternalFinalizedError {
     #[allow(dead_code)]
     UnexpectedStatusCode(http::StatusCode),
     Proposal(InternalProposalError),
+    Ohttp(OhttpEncapsulationError),
 }
 
 impl From<InternalFinalizedError> for FinalizedError {
@@ -72,16 +68,14 @@ impl Display for FinalizedError {
 impl std::error::Error for FinalizedError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.0 {
-            InternalFinalizedError::CreateRequest(e) => Some(e),
-            InternalFinalizedError::Encapsulation(e) => Some(e),
             InternalFinalizedError::Hpke(e) => Some(e),
-            InternalFinalizedError::ParseOhttp(_e) => None,
             InternalFinalizedError::InvalidSize => None,
             InternalFinalizedError::FinalizePsbt(_e) => None,
             InternalFinalizedError::MissingResponse => None,
             InternalFinalizedError::Psbt(e) => Some(e),
             InternalFinalizedError::UnexpectedStatusCode(_) => None,
             InternalFinalizedError::Proposal(e) => Some(e),
+            InternalFinalizedError::Ohttp(e) => Some(e),
         }
     }
 }
