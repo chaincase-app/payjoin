@@ -6,12 +6,13 @@ use error::{
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::v2::{self, EncapsulationError, HpkeContext};
+use super::v2::{self, extract_request, EncapsulationError, HpkeContext};
 use super::{serialize_url, AdditionalFeeContribution, BuildSenderError, InternalResult};
 use crate::hpke::decrypt_message_b;
 use crate::ohttp::ohttp_decapsulate;
 use crate::receive::ImplementationError;
 use crate::send::v2::V2PostContext;
+use crate::uri::UrlExt;
 use crate::{PjUri, Request};
 
 mod error;
@@ -36,55 +37,43 @@ impl Sender {
         &self,
         ohttp_relay: Url,
     ) -> Result<(Request, PostContext), CreateRequestError> {
-        use crate::hpke::encrypt_message_a;
-        use crate::ohttp::ohttp_encapsulate;
-        use crate::send::PsbtContext;
-        use crate::uri::UrlExt;
-        let url = self.0.endpoint().clone();
-        if let Ok(expiry) = url.exp() {
-            if std::time::SystemTime::now() > expiry {
-                return Err(InternalCreateRequestError::Expired(expiry).into());
-            }
-        }
         let rs = self
             .0
             .extract_rs_pubkey()
             .map_err(InternalCreateRequestError::ParseReceiverPubkeyParam)?;
+        let mut ohttp_keys = self
+            .0
+            .endpoint()
+            .ohttp()
+            .map_err(|_| InternalCreateRequestError::MissingOhttpConfig)?;
         let body = serialize_v2_body(
             &self.0.v1.psbt,
             self.0.v1.disable_output_substitution,
             self.0.v1.fee_contribution,
             self.0.v1.min_fee_rate,
         )?;
-        let hpke_ctx = HpkeContext::new(rs, &self.0.reply_key);
-        let body = encrypt_message_a(
+        let (request, ohttp_ctx) = extract_request(
+            ohttp_relay,
+            self.0.reply_key.clone(),
             body,
-            &hpke_ctx.reply_pair.public_key().clone(),
-            &hpke_ctx.receiver.clone(),
+            self.0.endpoint().clone(),
+            rs.clone(),
+            &mut ohttp_keys,
         )
-        .map_err(InternalCreateRequestError::Hpke)?;
-        let mut ohttp = self
-            .0
-            .v1
-            .endpoint
-            .ohttp()
-            .map_err(|_| InternalCreateRequestError::MissingOhttpConfig)?;
-        let (body, ohttp_ctx) = ohttp_encapsulate(&mut ohttp, "POST", url.as_str(), Some(&body))
-            .map_err(InternalCreateRequestError::OhttpEncapsulation)?;
-
+        .map_err(InternalCreateRequestError::V2CreateRequest)?;
         let v2_post_ctx = V2PostContext {
             endpoint: self.0.endpoint().clone(),
-            psbt_ctx: PsbtContext {
+            psbt_ctx: crate::send::PsbtContext {
                 original_psbt: self.0.v1.psbt.clone(),
                 disable_output_substitution: self.0.v1.disable_output_substitution,
                 fee_contribution: self.0.v1.fee_contribution,
                 payee: self.0.v1.payee.clone(),
                 min_fee_rate: self.0.v1.min_fee_rate,
             },
-            hpke_ctx,
+            hpke_ctx: HpkeContext::new(rs, &self.0.reply_key),
             ohttp_ctx,
         };
-        Ok((Request::new_v2(&ohttp_relay, &body), PostContext(v2_post_ctx)))
+        Ok((request, PostContext(v2_post_ctx)))
     }
 }
 
@@ -143,8 +132,8 @@ impl GetContext {
         let response_array: &[u8; crate::directory::ENCAPSULATED_MESSAGE_BYTES] =
             response.try_into().map_err(|_| InternalFinalizedError::InvalidSize)?;
 
-        let response = ohttp_decapsulate(ohttp_ctx, response_array)
-            .map_err(InternalFinalizedError::Encapsulation)?;
+        let response =
+            ohttp_decapsulate(ohttp_ctx, response_array).map_err(InternalFinalizedError::Ohttp)?;
         let body = match response.status() {
             http::StatusCode::OK => Some(response.body().to_vec()),
             http::StatusCode::ACCEPTED => None,
@@ -185,35 +174,22 @@ impl FinalizeContext {
     pub fn extract_req(
         &self,
         ohttp_relay: Url,
-    ) -> Result<(Request, ohttp::ClientResponse), FinalizedError> {
-        use crate::hpke::encrypt_message_a;
-        use crate::ohttp::ohttp_encapsulate;
-        use crate::uri::UrlExt;
-
-        let hpke_ctx = self.hpke_ctx.clone();
-        let directory_url = self.directory_url.clone();
-        // TODO: check if request is expired off the directory url
-
-        // The query params are not needed for the final request
-        // The reciever will ignore them. PSBT is all that is needed.
-        let body = serialize_v2_body(
-            &self.psbt,
-            false, // disable output substitution
-            None,  // fee contribution
-            FeeRate::BROADCAST_MIN,
-        )
-        .map_err(InternalFinalizedError::CreateRequest)?;
-        let body = encrypt_message_a(
+    ) -> Result<(Request, ohttp::ClientResponse), CreateRequestError> {
+        let reply_key = self.hpke_ctx.reply_pair.secret_key();
+        let body = serialize_v2_body(&self.psbt, false, None, FeeRate::BROADCAST_MIN)?;
+        let mut ohttp_keys = self
+            .directory_url
+            .ohttp()
+            .map_err(|_| InternalCreateRequestError::MissingOhttpConfig)?;
+        let (request, ohttp_ctx) = extract_request(
+            ohttp_relay,
+            reply_key.clone(),
             body,
-            &hpke_ctx.reply_pair.public_key().clone(),
-            &hpke_ctx.receiver.clone(),
+            self.directory_url.clone(),
+            self.hpke_ctx.receiver.clone(),
+            &mut ohttp_keys,
         )
-        .map_err(InternalFinalizedError::Hpke)?;
-        let mut ohttp = directory_url.ohttp().map_err(InternalFinalizedError::ParseOhttp)?;
-        let (body, ohttp_ctx) =
-            ohttp_encapsulate(&mut ohttp, "POST", directory_url.as_str(), Some(&body))
-                .map_err(InternalFinalizedError::Encapsulation)?;
-        let request = Request::new_v2(&ohttp_relay, &body);
+        .map_err(InternalCreateRequestError::V2CreateRequest)?;
         Ok((request, ohttp_ctx))
     }
 
