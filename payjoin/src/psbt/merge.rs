@@ -1,7 +1,6 @@
 //! Utilities for merging unique v0 PSBTs
 use bitcoin::Psbt;
 
-#[allow(dead_code)]
 /// Try to merge two PSBTs
 /// PSBTs here should not have the same unsigned tx
 /// if you do have the same unsigned tx, use `combine` instead
@@ -14,7 +13,13 @@ pub(crate) fn merge_unsigned_tx(acc: Psbt, psbt: Psbt) -> Psbt {
     unsigned_tx.input.dedup_by_key(|input| input.previous_output);
     unsigned_tx.output.extend(psbt.unsigned_tx.output);
 
-    Psbt::from_unsigned_tx(unsigned_tx).expect("pulling from unsigned tx above")
+    let mut merged_psbt =
+        Psbt::from_unsigned_tx(unsigned_tx).expect("pulling from unsigned tx above");
+    let zip = acc.inputs.iter().chain(psbt.inputs.iter()).collect::<Vec<_>>();
+    merged_psbt.inputs.iter_mut().enumerate().for_each(|(i, input)| {
+        input.witness_utxo = zip[i].witness_utxo.clone();
+    });
+    merged_psbt
 }
 
 #[cfg(test)]
