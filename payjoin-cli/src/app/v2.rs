@@ -80,7 +80,7 @@ impl AppTrait for App {
         let address = self.bitcoind()?.get_new_address(None, None)?.assume_checked();
         let ohttp_keys = unwrap_ohttp_keys_or_else_fetch(&self.config).await?;
         let session =
-            Receiver::new(address, self.config.pj_directory.clone(), ohttp_keys.clone(), None);
+            Receiver::new(address, self.config.pj_directory.clone(), ohttp_keys.clone(), None)?;
         self.db.insert_recv_session(session.clone())?;
         self.spawn_payjoin_receiver(session, Some(amount)).await
     }

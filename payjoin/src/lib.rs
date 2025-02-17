@@ -39,6 +39,8 @@ pub(crate) mod bech32;
 #[cfg_attr(docsrs, doc(cfg(feature = "directory")))]
 pub mod directory;
 
+#[cfg(feature = "_core")]
+pub(crate) mod into_url;
 #[cfg(feature = "io")]
 #[cfg_attr(docsrs, doc(cfg(feature = "io")))]
 pub mod io;
@@ -52,9 +54,10 @@ pub use request::*;
 mod uri;
 
 #[cfg(feature = "_core")]
+pub use into_url::{Error as IntoUrlError, IntoUrl};
+#[cfg(feature = "_core")]
 pub use uri::{PjParseError, PjUri, Uri, UriExt};
 #[cfg(feature = "_core")]
 pub use url::{ParseError, Url};
-
 #[cfg(feature = "_core")]
 pub(crate) mod error_codes;

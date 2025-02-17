@@ -33,7 +33,7 @@ use crate::hpke::{decrypt_message_b, encrypt_message_a, HpkeSecretKey};
 use crate::ohttp::{ohttp_decapsulate, ohttp_encapsulate};
 use crate::send::v1;
 use crate::uri::{ShortId, UrlExt};
-use crate::{HpkeKeyPair, HpkePublicKey, PjUri, Request};
+use crate::{HpkeKeyPair, HpkePublicKey, IntoUrl, PjUri, Request};
 
 mod error;
 
@@ -201,13 +201,13 @@ fn serialize_v2_body(
 ) -> Result<Vec<u8>, CreateRequestError> {
     // Grug say localhost base be discarded anyway. no big brain needed.
     let placeholder_url = serialize_url(
-        Url::parse("http://localhost").unwrap(),
+        Url::parse("http://localhost").expect("localhost is a valid URL"),
         disable_output_substitution,
         fee_contribution,
         min_fee_rate,
         "2", // payjoin version
     )
-    .map_err(InternalCreateRequestError::Url)?;
+    .map_err(|e| InternalCreateRequestError::Url(e.into()))?;
     let query_params = placeholder_url.query().unwrap_or_default();
     let base64 = psbt.to_string();
     Ok(format!("{}\n{}", base64, query_params).into_bytes())
@@ -253,7 +253,7 @@ pub struct V2GetContext {
 impl V2GetContext {
     pub fn extract_req(
         &self,
-        ohttp_relay: Url,
+        ohttp_relay: impl IntoUrl,
     ) -> Result<(Request, ohttp::ClientResponse), CreateRequestError> {
         use crate::uri::UrlExt;
         let base_url = self.endpoint.clone();
@@ -261,7 +261,9 @@ impl V2GetContext {
         // TODO unify with receiver's fn subdir_path_from_pubkey
         let hash = sha256::Hash::hash(&self.hpke_ctx.reply_pair.public_key().to_compressed_bytes());
         let subdir: ShortId = hash.into();
-        let url = base_url.join(&subdir.to_string()).map_err(InternalCreateRequestError::Url)?;
+        let url = base_url
+            .join(&subdir.to_string())
+            .map_err(|e| InternalCreateRequestError::Url(e.into()))?;
         let body = encrypt_message_a(
             Vec::new(),
             &self.hpke_ctx.reply_pair.public_key().clone(),
@@ -273,7 +275,8 @@ impl V2GetContext {
         let (body, ohttp_ctx) = ohttp_encapsulate(&mut ohttp, "GET", url.as_str(), Some(&body))
             .map_err(InternalCreateRequestError::OhttpEncapsulation)?;
 
-        Ok((Request::new_v2(&ohttp_relay, &body), ohttp_ctx))
+        let url = ohttp_relay.into_url().map_err(InternalCreateRequestError::Url)?;
+        Ok((Request::new_v2(&url, &body), ohttp_ctx))
     }
 
     pub fn process_response(
