@@ -2,18 +2,25 @@
 ## Payjoin config.toml configuration file. Lines beginning with # are comments.
 ##
 
+# Common Settings
+# --------------
+
+# The path to the database file
+db_path = "payjoin.db"
+
+# The maximum fee rate that the receiver is willing to pay (in sat/vB)
+max_fee_rate = 2.0
+
 # Bitcoin RPC Connection Settings
 # ------------------------------
-
-
+[bitcoind]
 # The RPC host of the wallet to connect to.
 # For example, if the wallet is "sender", then default values are:
 # 	- mainnet: http://localhost:8332/wallet/sender
 # 	- testnet: http://localhost:18332/wallet/sender
 # 	- regtest: http://localhost:18443/wallet/sender
 # 	- signet: http://localhost:38332/wallet/sender
-bitcoind_rpchost="http://localhost:18443/wallet/sender"
-
+rpchost = "http://localhost:18443/wallet/sender"
 
 # The RPC .cookie file used only for local authentication to bitcoind.
 # If rpcuser and rpcpassword are being used, this is not necessary.
@@ -22,36 +29,28 @@ bitcoind_rpchost="http://localhost:18443/wallet/sender"
 # 	MacOS: ~/Library/Application Support/Bitcoin/<NETWORK>/.cookie
 # 	Windows Vista and later: C:\Users\YourUserName\AppData\Roaming\Bitcoin\<NETWORK>\.cookie
 # 	Windows XP: C:\Documents and Settings\YourUserName\Application Data\Bitcoin\<NETWORK>\.cookie
-# bitcoind_cookie=
-
+cookie = ""
 
 # The rpcuser to connect to (specified in bitcoin.conf).
-bitcoind_rpcuser="user"
-
+rpcuser = "user"
 
 # The rpcpassword of the user to connect to (specified in bitcoin.conf).
-bitcoind_rpcpassword="password"
+rpcpassword = "password"
 
-## Payjoin Settings
-## ----------------
+# Version Configuration
+# -------------------
+# Uncomment ONE of the following version configurations depending on which version you want to use
 
+# Version 1 Configuration
+# [v1]
+# port = 3000
+# pj_endpoint = "https://localhost:3000"
 
-# (v1, receiver only) The port for v1 receiving servers to bind to.
-port="3000"
-
-
-# (v1, receiver only) The payjoin endpoint which coordinates the transaction.
-pj_endpoint="https://localhost:3000"
-
-
-# (v2 only) The payjoin directory to rendezvous at.
-pj_directory = "https://payjo.in"
-
-
-# (v2 only) The OHTTP relay that will forward requests to the OHTTP Gateway, which will forward to the pj_endpoint directory.
-ohttp_relay="https://pj.bobspacebkk.com"
-
-
-# (v2 only, optional) The HPKE keys which need to be fetched ahead of time from the pj_endpoint for the payjoin packets to be encrypted.
-# These can now be fetched and no longer need to be configured.
-ohttp_keys="./path/to/ohttp_keys"
+# Version 2 Configuration
+# [v2]
+# pj_directory = "https://payjo.in"
+# ohttp_relay = "https://pj.bobspacebkk.com"
+# # Optional: The HPKE keys which need to be fetched ahead of time from the pj_endpoint
+# # for the payjoin packets to be encrypted.
+# # These can now be fetched and no longer need to be configured.
+# ohttp_keys = "./path/to/ohttp_keys"
