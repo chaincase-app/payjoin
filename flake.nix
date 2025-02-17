@@ -95,14 +95,19 @@
 
         devShells = builtins.mapAttrs (_name: craneLib:
           craneLib.devShell {
-            packages = with pkgs; [
-              cargo-edit
-              cargo-nextest
-              cargo-watch
-              rust-analyzer
-            ] ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [
-              cargo-llvm-cov
-            ];
+            packages = with pkgs;
+              [
+                bitcoind
+                cargo-edit
+                cargo-nextest
+                cargo-watch
+                rust-analyzer
+              ]
+              ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [
+                cargo-llvm-cov
+              ];
+            BITCOIND_EXE = pkgs.lib.getExe' pkgs.bitcoind "bitcoind";
+            BITCOIND_SKIP_DOWNLOAD = 1;
           })
         craneLibVersions;
 
