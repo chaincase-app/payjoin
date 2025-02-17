@@ -16,7 +16,7 @@ pub async fn fetch_ohttp_keys(
     ohttp_relay: Url,
     payjoin_directory: Url,
 ) -> Result<OhttpKeys, Error> {
-    let ohttp_keys_url = payjoin_directory.join("/ohttp-keys")?;
+    let ohttp_keys_url = payjoin_directory.join(".well-known/ohttp-gateway")?;
     let proxy = Proxy::all(ohttp_relay.as_str())?;
     let client = Client::builder().proxy(proxy).build()?;
     let res = client.get(ohttp_keys_url).send().await?;
@@ -40,7 +40,7 @@ pub async fn fetch_ohttp_keys_with_cert(
     payjoin_directory: Url,
     cert_der: Vec<u8>,
 ) -> Result<OhttpKeys, Error> {
-    let ohttp_keys_url = payjoin_directory.join("/ohttp-keys")?;
+    let ohttp_keys_url = payjoin_directory.join(".well-known/ohttp-gateway")?;
     let proxy = Proxy::all(ohttp_relay.as_str())?;
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
