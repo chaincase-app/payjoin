@@ -35,6 +35,9 @@ pub(crate) mod v1;
 #[cfg_attr(docsrs, doc(cfg(feature = "v2")))]
 pub mod v2;
 
+#[cfg(feature = "multi-party")]
+pub mod multi_party;
+
 type InternalResult<T> = Result<T, InternalProposalError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,6 +437,11 @@ fn serialize_url(
     Ok(url)
 }
 
+#[cfg(feature = "multi-party")]
+fn append_optimisitic_merge_query_param(url: &mut Url) {
+    url.query_pairs_mut().append_pair("optimisticmerge", "true");
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use std::str::FromStr;
@@ -444,6 +452,8 @@ pub(crate) mod test {
 
     use super::serialize_url;
     use crate::psbt::PsbtExt;
+    #[cfg(feature = "multi-party")]
+    use crate::send::append_optimisitic_merge_query_param;
     use crate::send::AdditionalFeeContribution;
 
     pub(crate) const ORIGINAL_PSBT: &str = "cHNidP8BAHMCAAAAAY8nutGgJdyYGXWiBEb45Hoe9lWGbkxh/6bNiOJdCDuDAAAAAAD+////AtyVuAUAAAAAF6kUHehJ8GnSdBUOOv6ujXLrWmsJRDCHgIQeAAAAAAAXqRR3QJbbz0hnQ8IvQ0fptGn+votneofTAAAAAAEBIKgb1wUAAAAAF6kU3k4ekGHKWRNbA1rV5tR5kEVDVNCHAQcXFgAUx4pFclNVgo1WWAdN1SYNX8tphTABCGsCRzBEAiB8Q+A6dep+Rz92vhy26lT0AjZn4PRLi8Bf9qoB/CMk0wIgP/Rj2PWZ3gEjUkTlhDRNAQ0gXwTO7t9n+V14pZ6oljUBIQMVmsAaoNWHVMS02LfTSe0e388LNitPa1UQZyOihY+FFgABABYAFEb2Giu6c4KO5YW0pfw3lGp9jMUUAAA=";
@@ -509,6 +519,21 @@ pub(crate) mod test {
             serialize_url(Url::parse("http://localhost").unwrap(), true, None, FeeRate::ZERO, "2")
                 .unwrap();
         assert_eq!(url, Url::parse("http://localhost?v=2&disableoutputsubstitution=true").unwrap());
+
+        let url =
+            serialize_url(Url::parse("http://localhost").unwrap(), false, None, FeeRate::ZERO, "2")
+                .unwrap();
+        assert_eq!(url, Url::parse("http://localhost?v=2").unwrap());
+    }
+
+    #[test]
+    #[cfg(feature = "multi-party")]
+    fn test_optimistic_merge_query_param() {
+        let mut url =
+            serialize_url(Url::parse("http://localhost").unwrap(), false, None, FeeRate::ZERO, "2")
+                .unwrap();
+        append_optimisitic_merge_query_param(&mut url);
+        assert_eq!(url, Url::parse("http://localhost?v=2&optimisticmerge=true").unwrap());
 
         let url =
             serialize_url(Url::parse("http://localhost").unwrap(), false, None, FeeRate::ZERO, "2")
