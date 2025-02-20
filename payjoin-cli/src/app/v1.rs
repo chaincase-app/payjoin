@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use bitcoincore_rpc::bitcoin::Amount;
-use bitcoincore_rpc::RpcApi;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Buf, Bytes, Incoming};
@@ -14,7 +13,7 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use payjoin::bitcoin::psbt::Psbt;
-use payjoin::bitcoin::{self, FeeRate};
+use payjoin::bitcoin::FeeRate;
 use payjoin::receive::v1::{PayjoinProposal, UncheckedProposal};
 use payjoin::receive::ImplementationError;
 use payjoin::receive::ReplyableError::{self, Implementation, V1};
@@ -23,9 +22,10 @@ use payjoin::{Uri, UriExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use super::config::AppConfig;
+use super::config::Config;
+use super::wallet::BitcoindWallet;
 use super::App as AppTrait;
-use crate::app::{handle_interrupt, http_agent, input_pair_from_list_unspent};
+use crate::app::{handle_interrupt, http_agent};
 use crate::db::Database;
 #[cfg(feature = "_danger-local-https")]
 pub const LOCAL_CERT_FILE: &str = "localhost.der";
@@ -39,40 +39,27 @@ impl payjoin::receive::v1::Headers for Headers<'_> {
 
 #[derive(Clone)]
 pub(crate) struct App {
-    config: AppConfig,
+    config: Config,
     db: Arc<Database>,
+    wallet: BitcoindWallet,
     interrupt: watch::Receiver<()>,
 }
 
 #[async_trait::async_trait]
 impl AppTrait for App {
-    fn new(config: AppConfig) -> Result<Self> {
+    fn new(config: Config) -> Result<Self> {
         let db = Arc::new(Database::create(&config.db_path)?);
         let (interrupt_tx, interrupt_rx) = watch::channel(());
         tokio::spawn(handle_interrupt(interrupt_tx));
-        let app = Self { config, db, interrupt: interrupt_rx };
-        app.bitcoind()?
-            .get_blockchain_info()
+        let wallet = BitcoindWallet::new(&config.bitcoind)?;
+        let app = Self { config, db, wallet, interrupt: interrupt_rx };
+        app.wallet()
+            .network()
             .context("Failed to connect to bitcoind. Check config RPC connection.")?;
         Ok(app)
     }
 
-    fn bitcoind(&self) -> Result<bitcoincore_rpc::Client> {
-        match &self.config.bitcoind_cookie {
-            Some(cookie) => bitcoincore_rpc::Client::new(
-                self.config.bitcoind_rpchost.as_str(),
-                bitcoincore_rpc::Auth::CookieFile(cookie.into()),
-            ),
-            None => bitcoincore_rpc::Client::new(
-                self.config.bitcoind_rpchost.as_str(),
-                bitcoincore_rpc::Auth::UserPass(
-                    self.config.bitcoind_rpcuser.clone(),
-                    self.config.bitcoind_rpcpassword.clone(),
-                ),
-            ),
-        }
-        .with_context(|| "Failed to connect to bitcoind")
-    }
+    fn wallet(&self) -> BitcoindWallet { self.wallet.clone() }
 
     async fn send_payjoin(&self, bip21: &str, fee_rate: FeeRate) -> Result<()> {
         let uri =
@@ -113,11 +100,12 @@ impl AppTrait for App {
         Ok(())
     }
 
-    async fn receive_payjoin(self, amount: Amount) -> Result<()> {
+    #[allow(clippy::incompatible_msrv)]
+    async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
         let pj_uri_string = self.construct_payjoin_uri(amount, None)?;
         println!(
             "Listening at {}. Configured to accept payjoin at BIP 21 Payjoin Uri:",
-            self.config.port
+            self.config.v1()?.port
         );
         println!("{}", pj_uri_string);
 
@@ -130,6 +118,11 @@ impl AppTrait for App {
         }
         Ok(())
     }
+
+    #[cfg(feature = "v2")]
+    async fn resume_payjoins(&self) -> Result<()> {
+        unimplemented!("resume_payjoins not implemented for v1");
+    }
 }
 
 impl App {
@@ -138,10 +131,10 @@ impl App {
         amount: Amount,
         fallback_target: Option<&str>,
     ) -> Result<String> {
-        let pj_receiver_address = self.bitcoind()?.get_new_address(None, None)?.assume_checked();
+        let pj_receiver_address = self.wallet.get_new_address()?;
         let pj_part = match fallback_target {
             Some(target) => target,
-            None => self.config.pj_endpoint.as_str(),
+            None => self.config.v1()?.pj_endpoint.as_str(),
         };
         let pj_part = payjoin::Url::parse(pj_part)
             .map_err(|e| anyhow!("Failed to parse pj_endpoint: {}", e))?;
@@ -153,8 +146,8 @@ impl App {
         Ok(pj_uri.to_string())
     }
 
-    async fn start_http_server(self) -> Result<()> {
-        let addr = SocketAddr::from(([0, 0, 0, 0], self.config.port));
+    async fn start_http_server(&self) -> Result<()> {
+        let addr = SocketAddr::from(([0, 0, 0, 0], self.config.v1()?.port));
         let listener = TcpListener::bind(addr).await?;
         let app = self.clone();
 
@@ -258,21 +251,17 @@ impl App {
         &self,
         amount: Option<Amount>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, ReplyableError> {
-        let address = self
-            .bitcoind()
-            .map_err(|e| Implementation(e.into()))?
-            .get_new_address(None, None)
-            .map_err(|e| Implementation(e.into()))?
-            .assume_checked();
+        let v1_config = self.config.v1().map_err(|e| Implementation(e.into()))?;
+        let address = self.wallet.get_new_address().map_err(|e| Implementation(e.into()))?;
         let uri_string = if let Some(amount) = amount {
             format!(
                 "{}?amount={}&pj={}",
                 address.to_qr_uri(),
                 amount.to_btc(),
-                self.config.pj_endpoint
+                v1_config.pj_endpoint
             )
         } else {
-            format!("{}?pj={}", address.to_qr_uri(), self.config.pj_endpoint)
+            format!("{}?pj={}", address.to_qr_uri(), v1_config.pj_endpoint)
         };
         let uri = Uri::try_from(uri_string.clone())
             .map_err(|_| Implementation(anyhow!("Could not parse payjoin URI string.").into()))?;
@@ -305,38 +294,18 @@ impl App {
         &self,
         proposal: UncheckedProposal,
     ) -> Result<PayjoinProposal, ReplyableError> {
-        let bitcoind = self.bitcoind().map_err(|e| Implementation(e.into()))?;
+        let wallet = self.wallet();
 
         // in a payment processor where the sender could go offline, this is where you schedule to broadcast the original_tx
         let _to_broadcast_in_failure_case = proposal.extract_tx_to_schedule_broadcast();
 
-        // The network is used for checks later
-        let network = bitcoind.get_blockchain_info().map_err(|e| Implementation(e.into()))?.chain;
-
         // Receive Check 1: Can Broadcast
         let proposal =
-            proposal.check_broadcast_suitability(None, |tx| {
-                let raw_tx = bitcoin::consensus::encode::serialize_hex(&tx);
-                let mempool_results = bitcoind
-                    .test_mempool_accept(&[raw_tx])
-                    .map_err(|e| Implementation(e.into()))?;
-                match mempool_results.first() {
-                    Some(result) => Ok(result.allowed),
-                    None => Err(ImplementationError::from(
-                        "No mempool results returned on broadcast check",
-                    )),
-                }
-            })?;
+            proposal.check_broadcast_suitability(None, |tx| Ok(wallet.can_broadcast(tx)?))?;
         log::trace!("check1");
 
         // Receive Check 2: receiver can't sign for proposal inputs
-        let proposal = proposal.check_inputs_not_owned(|input| {
-            if let Ok(address) = bitcoin::Address::from_script(input, network) {
-                Ok(bitcoind.get_address_info(&address).map(|info| info.is_mine.unwrap_or(false))?)
-            } else {
-                Ok(false)
-            }
-        })?;
+        let proposal = proposal.check_inputs_not_owned(|input| Ok(wallet.is_mine(input)?))?;
         log::trace!("check2");
 
         // Receive Check 3: have we seen this input before? More of a check for non-interactive i.e. payment processor receivers.
@@ -344,35 +313,25 @@ impl App {
             .check_no_inputs_seen_before(|input| Ok(self.db.insert_input_seen_before(*input)?))?;
         log::trace!("check3");
 
-        let payjoin = payjoin.identify_receiver_outputs(|output_script| {
-            if let Ok(address) = bitcoin::Address::from_script(output_script, network) {
-                Ok(bitcoind.get_address_info(&address).map(|info| info.is_mine.unwrap_or(false))?)
-            } else {
-                Ok(false)
-            }
-        })?;
+        let payjoin = payjoin
+            .identify_receiver_outputs(|output_script| Ok(wallet.is_mine(output_script)?))?;
 
         let payjoin = payjoin
             .substitute_receiver_script(
-                &bitcoind
-                    .get_new_address(None, None)
-                    .map_err(|e| Implementation(e.into()))?
-                    .require_network(network)
+                &self
+                    .wallet
+                    .get_new_address()
                     .map_err(|e| Implementation(e.into()))?
                     .script_pubkey(),
             )
             .map_err(|e| Implementation(e.into()))?
             .commit_outputs();
 
-        let provisional_payjoin = try_contributing_inputs(payjoin.clone(), &bitcoind)
+        let provisional_payjoin = try_contributing_inputs(payjoin.clone(), &self.wallet)
             .map_err(ReplyableError::Implementation)?;
 
         let payjoin_proposal = provisional_payjoin.finalize_proposal(
-            |psbt: &Psbt| {
-                let res =
-                    bitcoind.wallet_process_psbt(&psbt.to_string(), None, None, Some(false))?;
-                Ok(Psbt::from_str(&res.psbt)?)
-            },
+            |psbt| Ok(self.wallet.process_psbt(psbt)?),
             None,
             self.config.max_fee_rate,
         )?;
@@ -382,13 +341,9 @@ impl App {
 
 fn try_contributing_inputs(
     payjoin: payjoin::receive::v1::WantsInputs,
-    bitcoind: &bitcoincore_rpc::Client,
+    wallet: &BitcoindWallet,
 ) -> Result<payjoin::receive::v1::ProvisionalProposal, ImplementationError> {
-    let candidate_inputs = bitcoind
-        .list_unspent(None, None, None, None, None)
-        .map_err(ImplementationError::from)?
-        .into_iter()
-        .map(input_pair_from_list_unspent);
+    let candidate_inputs = wallet.list_unspent()?;
 
     let selected_input =
         payjoin.try_preserving_privacy(candidate_inputs).map_err(ImplementationError::from)?;

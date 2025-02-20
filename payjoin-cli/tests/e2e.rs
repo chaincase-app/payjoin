@@ -19,9 +19,9 @@ mod e2e {
 
     const RECEIVE_SATS: &str = "54321";
 
-    #[cfg(not(feature = "v2"))]
+    #[cfg(feature = "v1")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn send_receive_payjoin() -> Result<(), BoxError> {
+    async fn send_receive_payjoin_v1() -> Result<(), BoxError> {
         let (bitcoind, _sender, _receiver) = init_bitcoind_sender_receiver(None, None)?;
         let temp_dir = env::temp_dir();
         let receiver_db_path = temp_dir.join("receiver_db");
@@ -38,6 +38,7 @@ mod e2e {
             let payjoin_cli = env!("CARGO_BIN_EXE_payjoin-cli");
 
             let mut cli_receiver = Command::new(payjoin_cli)
+                .arg("--bip78")
                 .arg("--rpchost")
                 .arg(&receiver_rpchost)
                 .arg("--cookie-file")
@@ -79,6 +80,7 @@ mod e2e {
             log::debug!("Got bip21 {}", &bip21);
 
             let mut cli_sender = Command::new(payjoin_cli)
+                .arg("--bip78")
                 .arg("--rpchost")
                 .arg(&sender_rpchost)
                 .arg("--cookie-file")
@@ -142,7 +144,7 @@ mod e2e {
 
     #[cfg(feature = "v2")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn send_receive_payjoin() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_receive_payjoin_v2() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::path::PathBuf;
 
         use payjoin_test_utils::{init_tracing, TestServices};

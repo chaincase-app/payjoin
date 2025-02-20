@@ -17,6 +17,9 @@
 //!
 //! **Use at your own risk. This crate has not yet been reviewed by independent Rust and Bitcoin security professionals.**
 
+#[cfg(not(any(feature = "directory", feature = "v1", feature = "v2")))]
+compile_error!("At least one of the features ['directory', 'v1', 'v2'] must be enabled");
+
 #[cfg(feature = "_core")]
 pub extern crate bitcoin;
 

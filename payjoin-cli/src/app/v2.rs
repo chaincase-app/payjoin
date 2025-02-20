@@ -1,58 +1,44 @@
-use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use bitcoincore_rpc::RpcApi;
 use payjoin::bitcoin::consensus::encode::serialize_hex;
 use payjoin::bitcoin::psbt::Psbt;
 use payjoin::bitcoin::{Amount, FeeRate};
 use payjoin::receive::v2::{Receiver, UncheckedProposal};
 use payjoin::receive::{Error, ImplementationError, ReplyableError};
 use payjoin::send::v2::{Sender, SenderBuilder};
-use payjoin::{bitcoin, Uri};
+use payjoin::Uri;
 use tokio::sync::watch;
 
-use super::config::AppConfig;
+use super::config::Config;
+use super::wallet::BitcoindWallet;
 use super::App as AppTrait;
-use crate::app::{handle_interrupt, http_agent, input_pair_from_list_unspent};
+use crate::app::{handle_interrupt, http_agent};
 use crate::db::Database;
 
 #[derive(Clone)]
 pub(crate) struct App {
-    config: AppConfig,
+    config: Config,
     db: Arc<Database>,
+    wallet: BitcoindWallet,
     interrupt: watch::Receiver<()>,
 }
 
 #[async_trait::async_trait]
 impl AppTrait for App {
-    fn new(config: AppConfig) -> Result<Self> {
+    fn new(config: Config) -> Result<Self> {
         let db = Arc::new(Database::create(&config.db_path)?);
         let (interrupt_tx, interrupt_rx) = watch::channel(());
         tokio::spawn(handle_interrupt(interrupt_tx));
-        let app = Self { config, db, interrupt: interrupt_rx };
-        app.bitcoind()?
-            .get_blockchain_info()
+        let wallet = BitcoindWallet::new(&config.bitcoind)?;
+        let app = Self { config, db, wallet, interrupt: interrupt_rx };
+        app.wallet()
+            .network()
             .context("Failed to connect to bitcoind. Check config RPC connection.")?;
         Ok(app)
     }
 
-    fn bitcoind(&self) -> Result<bitcoincore_rpc::Client> {
-        match &self.config.bitcoind_cookie {
-            Some(cookie) => bitcoincore_rpc::Client::new(
-                self.config.bitcoind_rpchost.as_str(),
-                bitcoincore_rpc::Auth::CookieFile(cookie.into()),
-            ),
-            None => bitcoincore_rpc::Client::new(
-                self.config.bitcoind_rpchost.as_str(),
-                bitcoincore_rpc::Auth::UserPass(
-                    self.config.bitcoind_rpcuser.clone(),
-                    self.config.bitcoind_rpcpassword.clone(),
-                ),
-            ),
-        }
-        .with_context(|| "Failed to connect to bitcoind")
-    }
+    fn wallet(&self) -> BitcoindWallet { self.wallet.clone() }
 
     async fn send_payjoin(&self, bip21: &str, fee_rate: FeeRate) -> Result<()> {
         use payjoin::UriExt;
@@ -76,82 +62,21 @@ impl AppTrait for App {
         self.spawn_payjoin_sender(req_ctx).await
     }
 
-    async fn receive_payjoin(self, amount: Amount) -> Result<()> {
-        let address = self.bitcoind()?.get_new_address(None, None)?.assume_checked();
+    async fn receive_payjoin(&self, amount: Amount) -> Result<()> {
+        let address = self.wallet().get_new_address()?;
         let ohttp_keys = unwrap_ohttp_keys_or_else_fetch(&self.config).await?;
-        let session =
-            Receiver::new(address, self.config.pj_directory.clone(), ohttp_keys.clone(), None)?;
+        let session = Receiver::new(
+            address,
+            self.config.v2()?.pj_directory.clone(),
+            ohttp_keys.clone(),
+            None,
+        )?;
         self.db.insert_recv_session(session.clone())?;
         self.spawn_payjoin_receiver(session, Some(amount)).await
     }
-}
-
-impl App {
-    #[allow(clippy::incompatible_msrv)]
-    async fn spawn_payjoin_sender(&self, mut req_ctx: Sender) -> Result<()> {
-        let mut interrupt = self.interrupt.clone();
-        tokio::select! {
-            res = self.long_poll_post(&mut req_ctx) => {
-                self.process_pj_response(res?)?;
-                self.db.clear_send_session(req_ctx.endpoint())?;
-            }
-            _ = interrupt.changed() => {
-                println!("Interrupted. Call `send` with the same arguments to resume this session or `resume` to resume all sessions.");
-            }
-        }
-        Ok(())
-    }
 
     #[allow(clippy::incompatible_msrv)]
-    async fn spawn_payjoin_receiver(
-        &self,
-        mut session: Receiver,
-        amount: Option<Amount>,
-    ) -> Result<()> {
-        println!("Receive session established");
-        let mut pj_uri = session.pj_uri();
-        pj_uri.amount = amount;
-
-        println!("Request Payjoin by sharing this Payjoin Uri:");
-        println!("{}", pj_uri);
-
-        let mut interrupt = self.interrupt.clone();
-        let receiver = tokio::select! {
-            res = self.long_poll_fallback(&mut session) => res,
-            _ = interrupt.changed() => {
-                println!("Interrupted. Call the `resume` command to resume all sessions.");
-                return Ok(());
-            }
-        }?;
-
-        println!("Fallback transaction received. Consider broadcasting this to get paid if the Payjoin fails:");
-        println!("{}", serialize_hex(&receiver.extract_tx_to_schedule_broadcast()));
-        let mut payjoin_proposal = match self.process_v2_proposal(receiver.clone()) {
-            Ok(proposal) => proposal,
-            Err(Error::ReplyToSender(e)) => {
-                return Err(handle_recoverable_error(e, receiver, &self.config.ohttp_relay).await);
-            }
-            Err(e) => return Err(e.into()),
-        };
-        let (req, ohttp_ctx) = payjoin_proposal
-            .extract_v2_req(&self.config.ohttp_relay)
-            .map_err(|e| anyhow!("v2 req extraction failed {}", e))?;
-        println!("Got a request from the sender. Responding with a Payjoin proposal.");
-        let res = post_request(req).await?;
-        payjoin_proposal
-            .process_res(&res.bytes().await?, ohttp_ctx)
-            .map_err(|e| anyhow!("Failed to deserialize response {}", e))?;
-        let payjoin_psbt = payjoin_proposal.psbt().clone();
-        println!(
-            "Response successful. Watch mempool for successful Payjoin. TXID: {}",
-            payjoin_psbt.extract_tx_unchecked_fee_rate().clone().compute_txid()
-        );
-        self.db.clear_recv_session()?;
-        Ok(())
-    }
-
-    #[allow(clippy::incompatible_msrv)]
-    pub async fn resume_payjoins(&self) -> Result<()> {
+    async fn resume_payjoins(&self) -> Result<()> {
         let recv_sessions = self.db.get_recv_sessions()?;
         let send_sessions = self.db.get_send_sessions()?;
 
@@ -189,16 +114,83 @@ impl App {
         }
         Ok(())
     }
+}
+
+impl App {
+    #[allow(clippy::incompatible_msrv)]
+    async fn spawn_payjoin_sender(&self, mut req_ctx: Sender) -> Result<()> {
+        let mut interrupt = self.interrupt.clone();
+        tokio::select! {
+            res = self.long_poll_post(&mut req_ctx) => {
+                self.process_pj_response(res?)?;
+                self.db.clear_send_session(req_ctx.endpoint())?;
+            }
+            _ = interrupt.changed() => {
+                println!("Interrupted. Call `send` with the same arguments to resume this session or `resume` to resume all sessions.");
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::incompatible_msrv)]
+    async fn spawn_payjoin_receiver(
+        &self,
+        mut session: Receiver,
+        amount: Option<Amount>,
+    ) -> Result<()> {
+        println!("Receive session established");
+        let mut pj_uri = session.pj_uri();
+        pj_uri.amount = amount;
+        println!("Request Payjoin by sharing this Payjoin Uri:");
+        println!("{}", pj_uri);
+
+        let mut interrupt = self.interrupt.clone();
+        let receiver = tokio::select! {
+            res = self.long_poll_fallback(&mut session) => res,
+            _ = interrupt.changed() => {
+                println!("Interrupted. Call the `resume` command to resume all sessions.");
+                return Ok(());
+            }
+        }?;
+
+        println!("Fallback transaction received. Consider broadcasting this to get paid if the Payjoin fails:");
+        println!("{}", serialize_hex(&receiver.extract_tx_to_schedule_broadcast()));
+        let mut payjoin_proposal = match self.process_v2_proposal(receiver.clone()) {
+            Ok(proposal) => proposal,
+            Err(Error::ReplyToSender(e)) => {
+                return Err(
+                    handle_recoverable_error(e, receiver, &self.config.v2()?.ohttp_relay).await
+                );
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let (req, ohttp_ctx) = payjoin_proposal
+            .extract_v2_req(&self.config.v2()?.ohttp_relay)
+            .map_err(|e| anyhow!("v2 req extraction failed {}", e))?;
+        println!("Got a request from the sender. Responding with a Payjoin proposal.");
+        let res = post_request(req).await?;
+        payjoin_proposal
+            .process_res(&res.bytes().await?, ohttp_ctx)
+            .map_err(|e| anyhow!("Failed to deserialize response {}", e))?;
+        let payjoin_psbt = payjoin_proposal.psbt().clone();
+        println!(
+            "Response successful. Watch mempool for successful Payjoin. TXID: {}",
+            payjoin_psbt.extract_tx_unchecked_fee_rate().clone().compute_txid()
+        );
+        self.db.clear_recv_session()?;
+        Ok(())
+    }
 
     async fn long_poll_post(&self, req_ctx: &mut Sender) -> Result<Psbt> {
-        match req_ctx.extract_v2(self.config.ohttp_relay.clone()) {
+        match req_ctx.extract_v2(self.config.v2()?.ohttp_relay.clone()) {
             Ok((req, ctx)) => {
                 println!("Posting Original PSBT Payload request...");
                 let response = post_request(req).await?;
                 println!("Sent fallback transaction");
                 let v2_ctx = Arc::new(ctx.process_response(&response.bytes().await?)?);
                 loop {
-                    let (req, ohttp_ctx) = v2_ctx.extract_req(self.config.ohttp_relay.clone())?;
+                    let (req, ohttp_ctx) =
+                        v2_ctx.extract_req(self.config.v2()?.ohttp_relay.clone())?;
                     let response = post_request(req).await?;
                     match v2_ctx.process_response(&response.bytes().await?, ohttp_ctx) {
                         Ok(Some(psbt)) => return Ok(psbt),
@@ -235,7 +227,7 @@ impl App {
         session: &mut payjoin::receive::v2::Receiver,
     ) -> Result<payjoin::receive::v2::UncheckedProposal> {
         loop {
-            let (req, context) = session.extract_req(&self.config.ohttp_relay)?;
+            let (req, context) = session.extract_req(&self.config.v2()?.ohttp_relay)?;
             println!("Polling receive request...");
             let ohttp_response = post_request(req).await?;
             let proposal = session
@@ -252,38 +244,18 @@ impl App {
         &self,
         proposal: payjoin::receive::v2::UncheckedProposal,
     ) -> Result<payjoin::receive::v2::PayjoinProposal, Error> {
-        let bitcoind = self.bitcoind().map_err(|e| ReplyableError::Implementation(e.into()))?;
+        let wallet = self.wallet();
 
         // in a payment processor where the sender could go offline, this is where you schedule to broadcast the original_tx
         let _to_broadcast_in_failure_case = proposal.extract_tx_to_schedule_broadcast();
 
-        // The network is used for checks later
-        let network = bitcoind
-            .get_blockchain_info()
-            .map_err(|e| ReplyableError::Implementation(e.into()))?
-            .chain;
         // Receive Check 1: Can Broadcast
         let proposal =
-            proposal.check_broadcast_suitability(None, |tx| {
-                let raw_tx = bitcoin::consensus::encode::serialize_hex(&tx);
-                let mempool_results = bitcoind.test_mempool_accept(&[raw_tx])?;
-                match mempool_results.first() {
-                    Some(result) => Ok(result.allowed),
-                    None => Err(ImplementationError::from(
-                        "No mempool results returned on broadcast check",
-                    )),
-                }
-            })?;
+            proposal.check_broadcast_suitability(None, |tx| Ok(wallet.can_broadcast(tx)?))?;
         log::trace!("check1");
 
         // Receive Check 2: receiver can't sign for proposal inputs
-        let proposal = proposal.check_inputs_not_owned(|input| {
-            if let Ok(address) = bitcoin::Address::from_script(input, network) {
-                Ok(bitcoind.get_address_info(&address).map(|info| info.is_mine.unwrap_or(false))?)
-            } else {
-                Ok(false)
-            }
-        })?;
+        let proposal = proposal.check_inputs_not_owned(|input| Ok(wallet.is_mine(input)?))?;
         log::trace!("check2");
 
         // Receive Check 3: have we seen this input before? More of a check for non-interactive i.e. payment processor receivers.
@@ -292,26 +264,14 @@ impl App {
         log::trace!("check3");
 
         let payjoin = payjoin
-            .identify_receiver_outputs(|output_script| {
-                if let Ok(address) = bitcoin::Address::from_script(output_script, network) {
-                    Ok(bitcoind
-                        .get_address_info(&address)
-                        .map(|info| info.is_mine.unwrap_or(false))?)
-                } else {
-                    Ok(false)
-                }
-            })?
+            .identify_receiver_outputs(|output_script| Ok(wallet.is_mine(output_script)?))?
             .commit_outputs();
 
-        let provisional_payjoin = try_contributing_inputs(payjoin.clone(), &bitcoind)
+        let provisional_payjoin = try_contributing_inputs(payjoin.clone(), &wallet)
             .map_err(ReplyableError::Implementation)?;
 
         let payjoin_proposal = provisional_payjoin.finalize_proposal(
-            |psbt: &Psbt| {
-                let res =
-                    bitcoind.wallet_process_psbt(&psbt.to_string(), None, None, Some(false))?;
-                Ok(Psbt::from_str(&res.psbt)?)
-            },
+            |psbt| Ok(wallet.process_psbt(psbt)?),
             None,
             self.config.max_fee_rate,
         )?;
@@ -351,13 +311,9 @@ async fn handle_recoverable_error(
 
 fn try_contributing_inputs(
     payjoin: payjoin::receive::v2::WantsInputs,
-    bitcoind: &bitcoincore_rpc::Client,
+    wallet: &BitcoindWallet,
 ) -> Result<payjoin::receive::v2::ProvisionalProposal, ImplementationError> {
-    let candidate_inputs = bitcoind
-        .list_unspent(None, None, None, None, None)
-        .map_err(ImplementationError::from)?
-        .into_iter()
-        .map(input_pair_from_list_unspent);
+    let candidate_inputs = wallet.list_unspent()?;
 
     let selected_input =
         payjoin.try_preserving_privacy(candidate_inputs).map_err(ImplementationError::from)?;
@@ -368,14 +324,14 @@ fn try_contributing_inputs(
         .commit_inputs())
 }
 
-async fn unwrap_ohttp_keys_or_else_fetch(config: &AppConfig) -> Result<payjoin::OhttpKeys> {
-    if let Some(keys) = config.ohttp_keys.clone() {
+async fn unwrap_ohttp_keys_or_else_fetch(config: &Config) -> Result<payjoin::OhttpKeys> {
+    if let Some(keys) = config.v2()?.ohttp_keys.clone() {
         println!("Using OHTTP Keys from config");
         Ok(keys)
     } else {
         println!("Bootstrapping private network transport over Oblivious HTTP");
-        let ohttp_relay = config.ohttp_relay.clone();
-        let payjoin_directory = config.pj_directory.clone();
+        let ohttp_relay = config.v2()?.ohttp_relay.clone();
+        let payjoin_directory = config.v2()?.pj_directory.clone();
         #[cfg(feature = "_danger-local-https")]
         let ohttp_keys = {
             let cert_der = crate::app::read_local_cert()?;

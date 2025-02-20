@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use app::config::AppConfig;
+use app::config::Config;
 use app::App as AppTrait;
 use clap::{arg, value_parser, Arg, ArgMatches, Command};
 use payjoin::bitcoin::amount::ParseAmountError;
@@ -9,18 +9,53 @@ use url::Url;
 mod app;
 mod db;
 
-#[cfg(all(not(feature = "v2"), feature = "v1"))]
-use app::v1::App;
-#[cfg(feature = "v2")]
-use app::v2::App;
+#[cfg(not(any(feature = "v1", feature = "v2")))]
+compile_error!("At least one of the features ['v1', 'v2'] must be enabled");
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
 
     let matches = cli();
-    let config = AppConfig::new(&matches).with_context(|| "Failed to parse config")?;
-    let app = App::new(config)?;
+    let config = Config::new(&matches)?;
+
+    #[allow(clippy::if_same_then_else)]
+    let app: Box<dyn AppTrait> = if matches.get_flag("bip78") {
+        #[cfg(feature = "v1")]
+        {
+            Box::new(crate::app::v1::App::new(config)?)
+        }
+        #[cfg(not(feature = "v1"))]
+        {
+            anyhow::bail!(
+                "BIP78 (v1) support is not enabled in this build. Recompile with --features v1"
+            )
+        }
+    } else if matches.get_flag("bip77") {
+        #[cfg(feature = "v2")]
+        {
+            Box::new(crate::app::v2::App::new(config)?)
+        }
+        #[cfg(not(feature = "v2"))]
+        {
+            anyhow::bail!(
+                "BIP77 (v2) support is not enabled in this build. Recompile with --features v2"
+            )
+        }
+    } else {
+        #[cfg(feature = "v2")]
+        {
+            Box::new(crate::app::v2::App::new(config)?)
+        }
+        #[cfg(all(feature = "v1", not(feature = "v2")))]
+        {
+            Box::new(crate::app::v1::App::new(config)?)
+        }
+        #[cfg(not(any(feature = "v1", feature = "v2")))]
+        {
+            anyhow::bail!("No valid version available - must compile with v1 or v2 feature")
+        }
+    };
 
     match matches.subcommand() {
         Some(("send", sub_matches)) => {
@@ -37,6 +72,9 @@ async fn main() -> Result<()> {
         }
         #[cfg(feature = "v2")]
         Some(("resume", _)) => {
+            if matches.get_flag("bip78") {
+                anyhow::bail!("Resume command is only available with BIP77 (v2)");
+            }
             println!("resume");
             app.resume_payjoins().await?;
         }
@@ -50,6 +88,20 @@ fn cli() -> ArgMatches {
     let mut cmd = Command::new("payjoin")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Payjoin - bitcoin scaling, savings, and privacy by default")
+        .arg(
+            Arg::new("bip77")
+                .long("bip77")
+                .help("Use BIP77 (v2) protocol (default)")
+                .conflicts_with("bip78")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("bip78")
+                .long("bip78")
+                .help("Use BIP78 (v1) protocol")
+                .conflicts_with("bip77")
+                .action(clap::ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("rpchost")
                 .long("rpchost")
@@ -121,7 +173,7 @@ fn cli() -> ArgMatches {
             .help("The maximum effective fee rate the receiver is willing to pay (in sat/vB)")
             .value_parser(parse_fee_rate_in_sat_per_vb),
     );
-    #[cfg(not(feature = "v2"))]
+    #[cfg(feature = "v1")]
     {
         receive_cmd = receive_cmd.arg(
             Arg::new("port")
