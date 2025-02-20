@@ -477,7 +477,7 @@ impl WantsInputs {
         &self,
         candidate_inputs: impl IntoIterator<Item = InputPair>,
     ) -> Result<InputPair, SelectionError> {
-        candidate_inputs.into_iter().next().ok_or(InternalSelectionError::NotFound.into())
+        candidate_inputs.into_iter().next().ok_or(InternalSelectionError::Empty.into())
     }
 
     /// Add the provided list of inputs to the transaction.
