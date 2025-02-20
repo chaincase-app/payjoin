@@ -128,7 +128,7 @@ impl bitcoin_uri::SerializeParams for &PayjoinExtras {
             .replacen(host, &host.to_uppercase(), 1);
 
         vec![
-            ("pjos", if self.disable_output_substitution { "1" } else { "0" }.to_string()),
+            ("pjos", if self.disable_output_substitution { "0" } else { "1" }.to_string()),
             ("pj", endpoint_str),
         ]
         .into_iter()
@@ -159,8 +159,8 @@ impl bitcoin_uri::de::DeserializationState<'_> for DeserializationState {
             "pj" => Err(InternalPjParseError::DuplicateParams("pj").into()),
             "pjos" if self.pjos.is_none() => {
                 match &*Cow::try_from(value).map_err(|_| InternalPjParseError::BadPjOs)? {
-                    "0" => self.pjos = Some(false),
-                    "1" => self.pjos = Some(true),
+                    "0" => self.pjos = Some(true),
+                    "1" => self.pjos = Some(false),
                     _ => return Err(InternalPjParseError::BadPjOs.into()),
                 }
                 Ok(bitcoin_uri::de::ParamKind::Known)
@@ -264,5 +264,26 @@ mod tests {
             .unwrap()
             .extras
             .pj_is_supported());
+    }
+
+    #[test]
+    fn test_pjos_parameter() {
+        // pjos=0 should disable output substitution
+        let uri = "bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=https://example.com&pjos=0";
+        let parsed = Uri::try_from(uri).unwrap();
+        match parsed.extras {
+            MaybePayjoinExtras::Supported(extras) =>
+                assert!(extras.is_output_substitution_disabled()),
+            _ => panic!("Expected Supported PayjoinExtras"),
+        }
+
+        // pjos=1 should allow output substitution
+        let uri = "bitcoin:12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX?pj=https://example.com&pjos=1";
+        let parsed = Uri::try_from(uri).unwrap();
+        match parsed.extras {
+            MaybePayjoinExtras::Supported(extras) =>
+                assert!(!extras.is_output_substitution_disabled()),
+            _ => panic!("Expected Supported PayjoinExtras"),
+        }
     }
 }
