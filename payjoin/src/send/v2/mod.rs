@@ -200,8 +200,10 @@ fn serialize_v2_body(
     min_fee_rate: FeeRate,
 ) -> Result<Vec<u8>, CreateRequestError> {
     // Grug say localhost base be discarded anyway. no big brain needed.
+    let base_url = Url::parse("http://localhost").expect("invalid URL");
+
     let placeholder_url = serialize_url(
-        Url::parse("http://localhost").expect("localhost is a valid URL"),
+        base_url,
         disable_output_substitution,
         fee_contribution,
         min_fee_rate,
@@ -325,13 +327,16 @@ impl HpkeContext {
 #[cfg(test)]
 mod test {
     #[test]
-    fn req_ctx_ser_de_roundtrip() {
+    fn req_ctx_ser_de_roundtrip() -> Result<(), payjoin_test_utils::BoxError> {
         use super::*;
         use crate::send::test::ORIGINAL_PSBT;
+
+        let psbt = Psbt::from_str(ORIGINAL_PSBT)?;
+        let endpoint = Url::parse("http://localhost:1234")?;
         let req_ctx = Sender {
             v1: v1::Sender {
-                psbt: Psbt::from_str(ORIGINAL_PSBT).unwrap(),
-                endpoint: Url::parse("http://localhost:1234").unwrap(),
+                psbt,
+                endpoint,
                 disable_output_substitution: false,
                 fee_contribution: None,
                 min_fee_rate: FeeRate::ZERO,
@@ -339,8 +344,9 @@ mod test {
             },
             reply_key: HpkeKeyPair::gen_keypair().0,
         };
-        let serialized = serde_json::to_string(&req_ctx).unwrap();
-        let deserialized = serde_json::from_str(&serialized).unwrap();
+        let serialized = serde_json::to_string(&req_ctx)?;
+        let deserialized = serde_json::from_str(&serialized)?;
         assert!(req_ctx == deserialized);
+        Ok(())
     }
 }
