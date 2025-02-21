@@ -170,7 +170,7 @@ impl<'de> serde::Deserialize<'de> for HpkePublicKey {
 
 /// Message A is sent from the sender to the receiver containing an Original PSBT payload
 pub fn encrypt_message_a(
-    body: &[u8; PADDED_PLAINTEXT_A_LENGTH],
+    body: [u8; PADDED_PLAINTEXT_A_LENGTH],
     reply_pk: &HpkePublicKey,
     receiver_pk: &HpkePublicKey,
 ) -> Result<Vec<u8>, HpkeError> {
@@ -181,6 +181,8 @@ pub fn encrypt_message_a(
             INFO_A,
             &mut OsRng,
         )?;
+    let mut body = body;
+    pad_plaintext_a(&mut body)?;
     let mut plaintext = compressed_bytes_from_pubkey(reply_pk).to_vec();
     plaintext.extend(body);
     let ciphertext = encryption_context.seal(&plaintext, &[])?;
@@ -220,7 +222,7 @@ pub fn decrypt_message_a(
 
 /// Message B is sent from the receiver to the sender containing a Payjoin PSBT payload or an error
 pub fn encrypt_message_b(
-    plaintext: &[u8; PADDED_PLAINTEXT_B_LENGTH],
+    mut body: [u8; PADDED_PLAINTEXT_B_LENGTH],
     receiver_keypair: &HpkeKeyPair,
     sender_pk: &HpkePublicKey,
 ) -> Result<Vec<u8>, HpkeError> {
@@ -234,6 +236,7 @@ pub fn encrypt_message_b(
             INFO_B,
             &mut OsRng,
         )?;
+    let plaintext = pad_plaintext_b(&mut body)?;
     let ciphertext = encryption_context.seal(plaintext, &[])?;
     let mut message_b = ellswift_bytes_from_encapped_key(&encapsulated_key)?.to_vec();
     message_b.extend(&ciphertext);
@@ -255,6 +258,48 @@ pub fn decrypt_message_b(
     let plaintext = decryption_ctx
         .open(message_b.get(ELLSWIFT_ENCODING_SIZE..).ok_or(HpkeError::PayloadTooShort)?, &[])?;
     Ok(plaintext)
+}
+
+fn pad_plaintext_a(
+    msg: &mut [u8; PADDED_PLAINTEXT_A_LENGTH],
+) -> Result<&[u8; PADDED_PLAINTEXT_A_LENGTH], HpkeError> {
+    if msg.len() > PADDED_PLAINTEXT_A_LENGTH {
+        return Err(HpkeError::PayloadTooLarge {
+            actual: msg.len(),
+            max: PADDED_PLAINTEXT_A_LENGTH,
+        });
+    }
+    let len_to_copy = msg.len().min(PADDED_PLAINTEXT_A_LENGTH);
+
+    let mut temp = [0; PADDED_PLAINTEXT_A_LENGTH];
+    temp[..len_to_copy].copy_from_slice(&msg[..len_to_copy]);
+
+    msg.fill(0);
+
+    msg[..len_to_copy].copy_from_slice(&temp[..len_to_copy]);
+
+    Ok(msg)
+}
+
+fn pad_plaintext_b(
+    msg: &mut [u8; PADDED_PLAINTEXT_B_LENGTH],
+) -> Result<&[u8; PADDED_PLAINTEXT_B_LENGTH], HpkeError> {
+    if msg.len() > PADDED_PLAINTEXT_B_LENGTH {
+        return Err(HpkeError::PayloadTooLarge {
+            actual: msg.len(),
+            max: PADDED_PLAINTEXT_B_LENGTH,
+        });
+    }
+    let len_to_copy = msg.len().min(PADDED_PLAINTEXT_B_LENGTH);
+
+    let mut temp = [0; PADDED_PLAINTEXT_B_LENGTH];
+    temp[..len_to_copy].copy_from_slice(&msg[..len_to_copy]);
+
+    msg.fill(0);
+
+    msg[..len_to_copy].copy_from_slice(&temp[..len_to_copy]);
+
+    Ok(msg)
 }
 
 /// Error from de/encrypting a v2 Hybrid Public Key Encryption payload.
@@ -319,12 +364,9 @@ mod test {
         let reply_keypair = HpkeKeyPair::gen_keypair();
         let receiver_keypair = HpkeKeyPair::gen_keypair();
 
-        let message_a = encrypt_message_a(
-            &plaintext,
-            reply_keypair.public_key(),
-            receiver_keypair.public_key(),
-        )
-        .expect("encryption should work");
+        let message_a =
+            encrypt_message_a(plaintext, reply_keypair.public_key(), receiver_keypair.public_key())
+                .expect("encryption should work");
         assert_eq!(message_a.len(), PADDED_MESSAGE_BYTES);
 
         let decrypted = decrypt_message_a(&message_a, receiver_keypair.secret_key().clone())
@@ -336,12 +378,9 @@ mod test {
 
         // ensure full plaintext round trips
         plaintext[PADDED_PLAINTEXT_A_LENGTH - 1] = 42;
-        let message_a = encrypt_message_a(
-            &plaintext,
-            reply_keypair.public_key(),
-            receiver_keypair.public_key(),
-        )
-        .expect("encryption should work");
+        let message_a =
+            encrypt_message_a(plaintext, reply_keypair.public_key(), receiver_keypair.public_key())
+                .expect("encryption should work");
 
         let decrypted = decrypt_message_a(&message_a, receiver_keypair.secret_key().clone())
             .expect("decryption should work");
@@ -376,9 +415,8 @@ mod test {
         let reply_keypair = HpkeKeyPair::gen_keypair();
         let receiver_keypair = HpkeKeyPair::gen_keypair();
 
-        let message_b =
-            encrypt_message_b(&plaintext, &receiver_keypair, reply_keypair.public_key())
-                .expect("encryption should work");
+        let message_b = encrypt_message_b(plaintext, &receiver_keypair, reply_keypair.public_key())
+            .expect("encryption should work");
 
         assert_eq!(message_b.len(), PADDED_MESSAGE_BYTES);
 
@@ -393,9 +431,8 @@ mod test {
         assert_eq!(decrypted, plaintext.to_vec());
 
         plaintext[PADDED_PLAINTEXT_B_LENGTH - 1] = 42;
-        let message_b =
-            encrypt_message_b(&plaintext, &receiver_keypair, reply_keypair.public_key())
-                .expect("encryption should work");
+        let message_b = encrypt_message_b(plaintext, &receiver_keypair, reply_keypair.public_key())
+            .expect("encryption should work");
 
         assert_eq!(message_b.len(), PADDED_MESSAGE_BYTES);
 
@@ -466,7 +503,7 @@ mod test {
 
                 let plaintext_a = [0u8; PADDED_PLAINTEXT_A_LENGTH];
                 let message_a = encrypt_message_a(
-                    &plaintext_a,
+                    plaintext_a,
                     reply_keypair.public_key(),
                     receiver_keypair.public_key(),
                 )
@@ -474,7 +511,7 @@ mod test {
 
                 let plaintext_b = [0u8; PADDED_PLAINTEXT_B_LENGTH];
                 let message_b =
-                    encrypt_message_b(&plaintext_b, &receiver_keypair, sender_keypair.public_key())
+                    encrypt_message_b(plaintext_b, &receiver_keypair, sender_keypair.public_key())
                         .expect("encryption should work");
 
                 messages_a.push(message_a);

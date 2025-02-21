@@ -16,7 +16,7 @@ use super::{
     v1, ImplementationError, InternalPayloadError, JsonError, OutputSubstitutionError,
     ReplyableError, SelectionError,
 };
-use crate::hpke::{decrypt_message_a, encrypt_message_b, HpkeError, HpkeKeyPair, HpkePublicKey};
+use crate::hpke::{decrypt_message_a, encrypt_message_b, HpkeKeyPair, HpkePublicKey};
 use crate::ohttp::{ohttp_decapsulate, ohttp_encapsulate, OhttpEncapsulationError, OhttpKeys};
 use crate::receive::{parse_payload, InputPair};
 use crate::uri::ShortId;
@@ -505,14 +505,8 @@ impl PayjoinProposal {
                 .map_err(|e| ReplyableError::Implementation(e.into()))?;
             payjoin_bytes.resize(PADDED_PLAINTEXT_B_LENGTH, 0);
 
-            body = encrypt_message_b(
-                &payjoin_bytes.clone().try_into().map_err(|_| HpkeError::PayloadTooLarge {
-                    actual: payjoin_bytes.len(),
-                    max: PADDED_PLAINTEXT_B_LENGTH,
-                })?,
-                &self.context.s,
-                e,
-            )?;
+            body =
+                encrypt_message_b(payjoin_bytes.clone().try_into().unwrap(), &self.context.s, e)?;
             method = "POST";
         } else {
             // Prepare v2 wrapped and backwards-compatible v1 payload

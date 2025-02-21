@@ -29,9 +29,7 @@ use url::Url;
 
 use super::error::BuildSenderError;
 use super::*;
-use crate::hpke::{
-    decrypt_message_b, encrypt_message_a, HpkeError, HpkeSecretKey, PADDED_PLAINTEXT_A_LENGTH,
-};
+use crate::hpke::{decrypt_message_b, encrypt_message_a, HpkeSecretKey, PADDED_PLAINTEXT_A_LENGTH};
 use crate::ohttp::{ohttp_decapsulate, ohttp_encapsulate};
 use crate::send::v1;
 use crate::uri::{ShortId, UrlExt};
@@ -161,12 +159,7 @@ impl Sender {
 
         let hpke_ctx = HpkeContext::new(rs, &self.reply_key);
         let body = encrypt_message_a(
-            &plaintext.clone().try_into().map_err(|_| {
-                InternalCreateRequestError::Hpke(HpkeError::PayloadTooLarge {
-                    actual: plaintext.len(),
-                    max: PADDED_PLAINTEXT_A_LENGTH,
-                })
-            })?,
+            plaintext.clone().try_into().unwrap(),
             &hpke_ctx.reply_pair.public_key().clone(),
             &hpke_ctx.receiver.clone(),
         )
@@ -274,7 +267,7 @@ impl V2GetContext {
             .join(&subdir.to_string())
             .map_err(|e| InternalCreateRequestError::Url(e.into()))?;
         let body = encrypt_message_a(
-            &[0; PADDED_PLAINTEXT_A_LENGTH],
+            [0; PADDED_PLAINTEXT_A_LENGTH],
             &self.hpke_ctx.reply_pair.public_key().clone(),
             &self.hpke_ctx.receiver.clone(),
         )
