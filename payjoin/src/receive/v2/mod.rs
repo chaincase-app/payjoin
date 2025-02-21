@@ -16,7 +16,7 @@ use super::{
     v1, ImplementationError, InternalPayloadError, JsonError, OutputSubstitutionError,
     ReplyableError, SelectionError,
 };
-use crate::hpke::{decrypt_message_a, encrypt_message_b, HpkeKeyPair, HpkePublicKey};
+use crate::hpke::{decrypt_message_a, encrypt_message_b, HpkeError, HpkeKeyPair, HpkePublicKey};
 use crate::ohttp::{ohttp_decapsulate, ohttp_encapsulate, OhttpEncapsulationError, OhttpKeys};
 use crate::receive::{parse_payload, InputPair};
 use crate::uri::ShortId;
@@ -488,20 +488,31 @@ impl PayjoinProposal {
         &mut self,
         ohttp_relay: impl IntoUrl,
     ) -> Result<(Request, ohttp::ClientResponse), Error> {
+        use crate::hpke::PADDED_PLAINTEXT_B_LENGTH;
+
         let target_resource: Url;
         let body: Vec<u8>;
         let method: &str;
 
         if let Some(e) = &self.context.e {
             // Prepare v2 payload
-            let payjoin_bytes = self.v1.psbt().serialize();
+            let mut payjoin_bytes = self.v1.psbt().serialize();
             let sender_subdir = subdir_path_from_pubkey(e);
             target_resource = self
                 .context
                 .directory
                 .join(&sender_subdir.to_string())
                 .map_err(|e| ReplyableError::Implementation(e.into()))?;
-            body = encrypt_message_b(payjoin_bytes, &self.context.s, e)?;
+            payjoin_bytes.resize(PADDED_PLAINTEXT_B_LENGTH, 0);
+
+            body = encrypt_message_b(
+                &payjoin_bytes.clone().try_into().map_err(|_| HpkeError::PayloadTooLarge {
+                    actual: payjoin_bytes.len(),
+                    max: PADDED_PLAINTEXT_B_LENGTH,
+                })?,
+                &self.context.s,
+                e,
+            )?;
             method = "POST";
         } else {
             // Prepare v2 wrapped and backwards-compatible v1 payload
