@@ -271,7 +271,7 @@ fn pad_plaintext(msg: &mut Vec<u8>, padded_length: usize) -> Result<&[u8], HpkeE
 /// Error from de/encrypting a v2 Hybrid Public Key Encryption payload.
 #[derive(Debug, PartialEq)]
 pub enum HpkeError {
-    Secp256k1(secp256k1::Error),
+    InvalidPublicKey,
     Hpke(hpke::HpkeError),
     InvalidKeyLength,
     PayloadTooLarge { actual: usize, max: usize },
@@ -283,7 +283,7 @@ impl From<hpke::HpkeError> for HpkeError {
 }
 
 impl From<secp256k1::Error> for HpkeError {
-    fn from(value: secp256k1::Error) -> Self { Self::Secp256k1(value) }
+    fn from(_: secp256k1::Error) -> Self { Self::InvalidPublicKey }
 }
 
 impl fmt::Display for HpkeError {
@@ -301,7 +301,7 @@ impl fmt::Display for HpkeError {
                 )
             }
             PayloadTooShort => write!(f, "Payload too small"),
-            Secp256k1(e) => e.fmt(f),
+            InvalidPublicKey => write!(f, "Invalid public key"),
         }
     }
 }
@@ -314,7 +314,7 @@ impl error::Error for HpkeError {
             Hpke(e) => Some(e),
             PayloadTooLarge { .. } => None,
             InvalidKeyLength | PayloadTooShort => None,
-            Secp256k1(e) => Some(e),
+            InvalidPublicKey => None,
         }
     }
 }
