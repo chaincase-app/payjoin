@@ -926,7 +926,7 @@ mod integration {
 
         let payjoin = match custom_outputs {
             Some(txos) => payjoin.replace_receiver_outputs(
-                txos,
+                txos.iter(),
                 drain_script.expect("drain_script should be provided with custom_outputs"),
             )?,
             None => payjoin.substitute_receiver_script(
