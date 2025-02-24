@@ -184,7 +184,7 @@ impl bitcoin_uri::de::DeserializationState<'_> for DeserializationState {
                 {
                     Ok(MaybePayjoinExtras::Supported(PayjoinExtras {
                         endpoint,
-                        disable_output_substitution: pjos.unwrap_or(false),
+                        disable_output_substitution: !pjos.unwrap_or(false),
                     }))
                 } else {
                     Err(InternalPjParseError::UnsecureEndpoint.into())
