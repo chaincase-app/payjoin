@@ -159,8 +159,8 @@ impl bitcoin_uri::de::DeserializationState<'_> for DeserializationState {
             "pj" => Err(InternalPjParseError::DuplicateParams("pj").into()),
             "pjos" if self.pjos.is_none() => {
                 match &*Cow::try_from(value).map_err(|_| InternalPjParseError::BadPjOs)? {
-                    "0" => self.pjos = Some(true),
-                    "1" => self.pjos = Some(false),
+                    "0" => self.pjos = Some(false),
+                    "1" => self.pjos = Some(true),
                     _ => return Err(InternalPjParseError::BadPjOs.into()),
                 }
                 Ok(bitcoin_uri::de::ParamKind::Known)
