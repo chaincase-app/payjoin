@@ -42,37 +42,27 @@ use super::{
     ImplementationError, InputPair, OutputSubstitutionError, ReplyableError, SelectionError,
 };
 use crate::psbt::PsbtExt;
-use crate::receive::InternalPayloadError;
+use crate::receive::{InternalPayloadError, PersisterId};
 use crate::traits::Persister;
 #[cfg(feature = "v1")]
 mod exclusive;
 #[cfg(feature = "v1")]
 pub use exclusive::*;
 
-// macro_rules! impl_persistable {
-//     ($state_machine_type:ident) => {
-//         impl Persistable for $state_machine_type {
-//             type Key = [u8; 32]; // Using original proposal txid as key
-//             fn save(&self) -> Result<(Self::Key, Vec<u8>), PersistableError> {
-//                 let mut key = [0u8; 32];
-//                 let writer = &mut key.as_mut_slice();
-//                 self.psbt
-//                     .unsigned_tx
-//                     .compute_txid()
-//                     .consensus_encode(writer)
-//                     .expect("32 bytes is sufficient for txid");
-//                 let data =
-//                     serde_json::to_vec(self).map_err(InternalPersistableError::Serialization)?;
-//                 Ok((key, data))
-//             }
-//             fn load(data: &[u8]) -> Result<Self, PersistableError> {
-//                 let result = serde_json::from_slice(data)
-//                     .map_err(InternalPersistableError::Serialization)?;
-//                 Ok(result)
-//             }
-//         }
-//     };
-// }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state", content = "data")]
+pub enum PayjoinProposalState {
+    Unchecked(UncheckedProposal),
+    // TODO: add the other type state after finalizing design
+}
+
+impl PayjoinProposalState {
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            PayjoinProposalState::Unchecked(_) => 0,
+        }
+    }
+}
 
 /// The sender's original PSBT and optional parameters
 ///
@@ -83,7 +73,7 @@ pub use exclusive::*;
 /// transaction with extract_tx_to_schedule_broadcast() and schedule, followed by checking
 /// that the transaction can be broadcast with check_broadcast_suitability. Otherwise it is safe to
 /// call assume_interactive_receive to proceed with validation.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UncheckedProposal {
     pub(crate) psbt: Psbt,
     pub(crate) params: Params,
@@ -121,10 +111,10 @@ impl UncheckedProposal {
         self,
         min_fee_rate: Option<FeeRate>,
         can_broadcast: impl Fn(&bitcoin::Transaction) -> Result<bool, ImplementationError>,
-        persistor: P,
+        persister: P,
     ) -> Result<MaybeInputsOwned, ReplyableError>
     where
-        P::Key: From<bitcoin::Txid>,
+        P::Key: From<PersisterId>,
     {
         let original_psbt_fee_rate = self.psbt_fee_rate()?;
         if let Some(min_fee_rate) = min_fee_rate {
@@ -139,8 +129,12 @@ impl UncheckedProposal {
         if can_broadcast(&self.psbt.clone().extract_tx_unchecked_fee_rate())
             .map_err(ReplyableError::Implementation)?
         {
-            persistor
-                .save(self.psbt.unsigned_tx.compute_txid().into(), self.clone())
+            let state = PayjoinProposalState::Unchecked(self.clone());
+            persister
+                .save(
+                    PersisterId::new(self.psbt.unsigned_tx.compute_txid(), state.to_u8()).into(),
+                    state,
+                )
                 .map_err(|e| ReplyableError::Implementation(e.into()))?;
             Ok(MaybeInputsOwned { psbt: self.psbt, params: self.params })
         } else {
@@ -832,15 +826,10 @@ impl std::fmt::Display for NoopPersisterError {
 }
 
 impl Persister for NoopPersister {
-    type Key = bitcoin::Txid;
+    type Key = PersisterId;
     type Error = NoopPersisterError;
     fn save<T: Serialize>(&self, _key: Self::Key, _value: T) -> Result<(), Self::Error> { Ok(()) }
 }
-
-// impl_persistable!(UncheckedProposal);
-// impl_persistable!(MaybeInputsOwned);
-// impl_persistable!(MaybeInputsSeen);
-// impl_persistable!(OutputsUnknown);
 
 #[cfg(test)]
 pub(crate) mod test {

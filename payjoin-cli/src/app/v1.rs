@@ -26,7 +26,8 @@ use tokio::sync::watch;
 use super::config::AppConfig;
 use super::App as AppTrait;
 use crate::app::{handle_interrupt, http_agent, input_pair_from_list_unspent};
-use crate::db::Database;
+use crate::db::{Database, ReciverPersister};
+
 #[cfg(feature = "_danger-local-https")]
 pub const LOCAL_CERT_FILE: &str = "localhost.der";
 
@@ -306,6 +307,7 @@ impl App {
         proposal: UncheckedProposal,
     ) -> Result<PayjoinProposal, ReplyableError> {
         let bitcoind = self.bitcoind().map_err(|e| Implementation(e.into()))?;
+        let persister = ReciverPersister(self.db.clone());
 
         // in a payment processor where the sender could go offline, this is where you schedule to broadcast the original_tx
         let _to_broadcast_in_failure_case = proposal.extract_tx_to_schedule_broadcast();
@@ -314,8 +316,9 @@ impl App {
         let network = bitcoind.get_blockchain_info().map_err(|e| Implementation(e.into()))?.chain;
 
         // Receive Check 1: Can Broadcast
-        let proposal =
-            proposal.check_broadcast_suitability(None, |tx| {
+        let proposal = proposal.check_broadcast_suitability(
+            None,
+            |tx| {
                 let raw_tx = bitcoin::consensus::encode::serialize_hex(&tx);
                 let mempool_results = bitcoind
                     .test_mempool_accept(&[raw_tx])
@@ -326,7 +329,9 @@ impl App {
                         "No mempool results returned on broadcast check",
                     )),
                 }
-            })?;
+            },
+            persister,
+        )?;
         log::trace!("check1");
 
         // Receive Check 2: receiver can't sign for proposal inputs

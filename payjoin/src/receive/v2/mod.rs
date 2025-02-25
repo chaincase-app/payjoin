@@ -19,7 +19,7 @@ use super::{
 };
 use crate::hpke::{decrypt_message_a, encrypt_message_b, HpkeKeyPair, HpkePublicKey};
 use crate::ohttp::{ohttp_decapsulate, ohttp_encapsulate, OhttpEncapsulationError, OhttpKeys};
-use crate::receive::{parse_payload, InputPair};
+use crate::receive::{parse_payload, InputPair, PersisterId};
 use crate::traits::Persister;
 use crate::uri::ShortId;
 use crate::{IntoUrl, IntoUrlError, Request};
@@ -239,12 +239,12 @@ impl UncheckedProposal {
         self,
         min_fee_rate: Option<FeeRate>,
         can_broadcast: impl Fn(&bitcoin::Transaction) -> Result<bool, ImplementationError>,
-        persistor: P,
+        persister: P,
     ) -> Result<MaybeInputsOwned, ReplyableError>
     where
-        P::Key: From<bitcoin::Txid>,
+        P::Key: From<PersisterId>,
     {
-        let inner = self.v1.check_broadcast_suitability(min_fee_rate, can_broadcast, persistor)?;
+        let inner = self.v1.check_broadcast_suitability(min_fee_rate, can_broadcast, persister)?;
         Ok(MaybeInputsOwned { v1: inner, context: self.context })
     }
 

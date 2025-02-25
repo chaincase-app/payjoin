@@ -1,15 +1,15 @@
 use std::fmt;
 
-#[cfg(feature = "v2")]
 use bitcoincore_rpc::jsonrpc::serde_json;
+use payjoin::bitcoin;
 use sled::Error as SledError;
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub(crate) enum Error {
+    BitcoinConsensus(bitcoin::consensus::encode::Error),
     Sled(SledError),
-    #[cfg(feature = "v2")]
     Serialize(serde_json::Error),
     #[cfg(feature = "v2")]
     Deserialize(serde_json::Error),
@@ -18,8 +18,8 @@ pub(crate) enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::BitcoinConsensus(e) => write!(f, "Bitcoin consensus error: {}", e),
             Error::Sled(e) => write!(f, "Database operation failed: {}", e),
-            #[cfg(feature = "v2")]
             Error::Serialize(e) => write!(f, "Serialization failed: {}", e),
             #[cfg(feature = "v2")]
             Error::Deserialize(e) => write!(f, "Deserialization failed: {}", e),
