@@ -124,10 +124,7 @@ pub fn local_cert_key() -> (Vec<u8>, Vec<u8>) {
     (cert_der, key_der)
 }
 
-pub fn init_bitcoind_sender_receiver(
-    sender_address_type: Option<AddressType>,
-    receiver_address_type: Option<AddressType>,
-) -> Result<(bitcoind::BitcoinD, bitcoincore_rpc::Client, bitcoincore_rpc::Client), BoxError> {
+pub fn init_bitcoind() -> Result<bitcoind::BitcoinD, BoxError> {
     let bitcoind_exe = env::var("BITCOIND_EXE")
         .ok()
         .or_else(|| bitcoind::downloaded_exe_path().ok())
@@ -135,29 +132,78 @@ pub fn init_bitcoind_sender_receiver(
     let mut conf = bitcoind::Conf::default();
     conf.view_stdout = log_enabled!(Level::Debug);
     let bitcoind = bitcoind::BitcoinD::with_conf(bitcoind_exe, &conf)?;
-    let receiver = bitcoind.create_wallet("receiver")?;
-    let receiver_address = receiver.get_new_address(None, receiver_address_type)?.assume_checked();
-    let sender = bitcoind.create_wallet("sender")?;
-    let sender_address = sender.get_new_address(None, sender_address_type)?.assume_checked();
-    bitcoind.client.generate_to_address(1, &receiver_address)?;
-    bitcoind.client.generate_to_address(101, &sender_address)?;
+    Ok(bitcoind)
+}
 
-    assert_eq!(
-        Amount::from_btc(50.0)?,
-        receiver.get_balances()?.mine.trusted,
-        "receiver doesn't own bitcoin"
-    );
+pub fn init_bitcoind_sender_receiver(
+    sender_address_type: Option<AddressType>,
+    receiver_address_type: Option<AddressType>,
+) -> Result<(bitcoind::BitcoinD, bitcoincore_rpc::Client, bitcoincore_rpc::Client), BoxError> {
+    let bitcoind = init_bitcoind()?;
+    let mut wallets = create_and_fund_wallets(
+        &bitcoind,
+        vec![("receiver", receiver_address_type), ("sender", sender_address_type)],
+    )?;
+    let receiver = wallets.pop().expect("receiver to exist");
+    let sender = wallets.pop().expect("sender to exist");
 
-    assert_eq!(
-        Amount::from_btc(50.0)?,
-        sender.get_balances()?.mine.trusted,
-        "sender doesn't own bitcoin"
-    );
-    Ok((bitcoind, sender, receiver))
+    Ok((bitcoind, receiver, sender))
+}
+
+fn create_and_fund_wallets<W: AsRef<str>>(
+    bitcoind: &bitcoind::BitcoinD,
+    wallets: Vec<(W, Option<AddressType>)>,
+) -> Result<Vec<bitcoincore_rpc::Client>, BoxError> {
+    let mut funded_wallets = vec![];
+    let funding_wallet = bitcoind.create_wallet("funding_wallet")?;
+    let funding_address = funding_wallet.get_new_address(None, None)?.assume_checked();
+    // 100 blocks would work here, we add a extra block to cover fees between transfers
+    bitcoind.client.generate_to_address(101 + wallets.len() as u64, &funding_address)?;
+    for (wallet_name, address_type) in wallets {
+        let wallet = bitcoind.create_wallet(wallet_name)?;
+        let address = wallet.get_new_address(None, address_type)?.assume_checked();
+        funding_wallet.send_to_address(
+            &address,
+            Amount::from_btc(50.0)?,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        funded_wallets.push(wallet);
+    }
+    // Mine the block which funds the different wallets
+    bitcoind.client.generate_to_address(1, &funding_address)?;
+
+    for wallet in funded_wallets.iter() {
+        let balances = wallet.get_balances()?;
+        assert_eq!(
+            balances.mine.trusted,
+            Amount::from_btc(50.0)?,
+            "wallet doesn't have expected amount of bitcoin"
+        );
+    }
+
+    Ok(funded_wallets)
 }
 
 pub fn http_agent(cert_der: Vec<u8>) -> Result<Client, BoxSendSyncError> {
     Ok(http_agent_builder(cert_der).build()?)
+}
+
+pub fn init_bitcoind_multi_sender_single_reciever(
+    number_of_senders: usize,
+) -> Result<(bitcoind::BitcoinD, Vec<bitcoincore_rpc::Client>, bitcoincore_rpc::Client), BoxError> {
+    let bitcoind = init_bitcoind()?;
+    let wallets_to_create =
+        (0..number_of_senders + 1).map(|i| (format!("sender_{}", i), None)).collect::<Vec<_>>();
+    let mut wallets = create_and_fund_wallets(&bitcoind, wallets_to_create)?;
+    let receiver = wallets.pop().expect("reciever to exist");
+    let senders = wallets;
+
+    Ok((bitcoind, senders, receiver))
 }
 
 fn http_agent_builder(cert_der: Vec<u8>) -> ClientBuilder {

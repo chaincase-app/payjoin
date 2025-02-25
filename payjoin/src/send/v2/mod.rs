@@ -24,6 +24,7 @@
 use bitcoin::hashes::{sha256, Hash};
 pub use error::{CreateRequestError, EncapsulationError};
 use error::{InternalCreateRequestError, InternalEncapsulationError};
+use ohttp::ClientResponse;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -33,12 +34,12 @@ use crate::hpke::{decrypt_message_b, encrypt_message_a, HpkeSecretKey};
 use crate::ohttp::{ohttp_decapsulate, ohttp_encapsulate};
 use crate::send::v1;
 use crate::uri::{ShortId, UrlExt};
-use crate::{HpkeKeyPair, HpkePublicKey, IntoUrl, PjUri, Request};
+use crate::{HpkeKeyPair, HpkePublicKey, IntoUrl, OhttpKeys, PjUri, Request};
 
 mod error;
 
 #[derive(Clone)]
-pub struct SenderBuilder<'a>(v1::SenderBuilder<'a>);
+pub struct SenderBuilder<'a>(pub(crate) v1::SenderBuilder<'a>);
 
 impl<'a> SenderBuilder<'a> {
     /// Prepare the context from which to make Sender requests
@@ -119,9 +120,9 @@ impl<'a> SenderBuilder<'a> {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sender {
     /// The v1 Sender.
-    v1: v1::Sender,
+    pub(crate) v1: v1::Sender,
     /// The secret key to decrypt the receiver's reply.
-    reply_key: HpkeSecretKey,
+    pub(crate) reply_key: HpkeSecretKey,
 }
 
 impl Sender {
@@ -138,37 +139,34 @@ impl Sender {
         &self,
         ohttp_relay: Url,
     ) -> Result<(Request, V2PostContext), CreateRequestError> {
-        use crate::hpke::encrypt_message_a;
-        use crate::ohttp::ohttp_encapsulate;
-        use crate::send::PsbtContext;
-        use crate::uri::UrlExt;
         if let Ok(expiry) = self.v1.endpoint.exp() {
             if std::time::SystemTime::now() > expiry {
                 return Err(InternalCreateRequestError::Expired(expiry).into());
             }
         }
-        let rs = self.extract_rs_pubkey()?;
-        let url = self.v1.endpoint.clone();
+
+        let mut ohttp_keys = self
+            .v1
+            .endpoint()
+            .ohttp()
+            .map_err(|_| InternalCreateRequestError::MissingOhttpConfig)?;
         let body = serialize_v2_body(
             &self.v1.psbt,
             self.v1.disable_output_substitution,
             self.v1.fee_contribution,
             self.v1.min_fee_rate,
         )?;
-        let hpke_ctx = HpkeContext::new(rs, &self.reply_key);
-        let body = encrypt_message_a(
+        let (request, ohttp_ctx) = extract_request(
+            ohttp_relay,
+            self.reply_key.clone(),
             body,
-            &hpke_ctx.reply_pair.public_key().clone(),
-            &hpke_ctx.receiver.clone(),
-        )
-        .map_err(InternalCreateRequestError::Hpke)?;
-        let mut ohttp =
-            self.v1.endpoint.ohttp().map_err(|_| InternalCreateRequestError::MissingOhttpConfig)?;
-        let (body, ohttp_ctx) = ohttp_encapsulate(&mut ohttp, "POST", url.as_str(), Some(&body))
-            .map_err(InternalCreateRequestError::OhttpEncapsulation)?;
-        log::debug!("ohttp_relay_url: {:?}", ohttp_relay);
+            self.v1.endpoint.clone(),
+            self.extract_rs_pubkey()?,
+            &mut ohttp_keys,
+        )?;
+        let rs = self.extract_rs_pubkey()?;
         Ok((
-            Request::new_v2(&ohttp_relay, &body),
+            request,
             V2PostContext {
                 endpoint: self.v1.endpoint.clone(),
                 psbt_ctx: PsbtContext {
@@ -178,13 +176,13 @@ impl Sender {
                     payee: self.v1.payee.clone(),
                     min_fee_rate: self.v1.min_fee_rate,
                 },
-                hpke_ctx,
+                hpke_ctx: HpkeContext::new(rs, &self.reply_key),
                 ohttp_ctx,
             },
         ))
     }
 
-    fn extract_rs_pubkey(
+    pub(crate) fn extract_rs_pubkey(
         &self,
     ) -> Result<HpkePublicKey, crate::uri::url_ext::ParseReceiverPubkeyParamError> {
         self.v1.endpoint.receiver_pubkey()
@@ -193,7 +191,32 @@ impl Sender {
     pub fn endpoint(&self) -> &Url { self.v1.endpoint() }
 }
 
-fn serialize_v2_body(
+pub(crate) fn extract_request(
+    ohttp_relay: Url,
+    reply_key: HpkeSecretKey,
+    body: Vec<u8>,
+    url: Url,
+    receiver_pubkey: HpkePublicKey,
+    ohttp_keys: &mut OhttpKeys,
+) -> Result<(Request, ClientResponse), CreateRequestError> {
+    use crate::hpke::encrypt_message_a;
+    use crate::ohttp::ohttp_encapsulate;
+    let hpke_ctx = HpkeContext::new(receiver_pubkey, &reply_key);
+    let body = encrypt_message_a(
+        body,
+        &hpke_ctx.reply_pair.public_key().clone(),
+        &hpke_ctx.receiver.clone(),
+    )
+    .map_err(InternalCreateRequestError::Hpke)?;
+
+    let (body, ohttp_ctx) = ohttp_encapsulate(ohttp_keys, "POST", url.as_str(), Some(&body))
+        .map_err(InternalCreateRequestError::OhttpEncapsulation)?;
+    log::debug!("ohttp_relay_url: {:?}", ohttp_relay);
+    let request = Request::new_v2(&ohttp_relay, &body);
+    Ok((request, ohttp_ctx))
+}
+
+pub(crate) fn serialize_v2_body(
     psbt: &Psbt,
     disable_output_substitution: bool,
     fee_contribution: Option<AdditionalFeeContribution>,
@@ -217,10 +240,10 @@ fn serialize_v2_body(
 
 pub struct V2PostContext {
     /// The payjoin directory subdirectory to send the request to.
-    endpoint: Url,
-    psbt_ctx: PsbtContext,
-    hpke_ctx: HpkeContext,
-    ohttp_ctx: ohttp::ClientResponse,
+    pub(crate) endpoint: Url,
+    pub(crate) psbt_ctx: PsbtContext,
+    pub(crate) hpke_ctx: HpkeContext,
+    pub(crate) ohttp_ctx: ohttp::ClientResponse,
 }
 
 impl V2PostContext {
@@ -247,9 +270,9 @@ impl V2PostContext {
 #[derive(Debug, Clone)]
 pub struct V2GetContext {
     /// The payjoin directory subdirectory to send the request to.
-    endpoint: Url,
-    psbt_ctx: PsbtContext,
-    hpke_ctx: HpkeContext,
+    pub(crate) endpoint: Url,
+    pub(crate) psbt_ctx: PsbtContext,
+    pub(crate) hpke_ctx: HpkeContext,
 }
 
 impl V2GetContext {
@@ -312,9 +335,9 @@ impl V2GetContext {
 
 #[cfg(feature = "v2")]
 #[derive(Debug, Clone)]
-struct HpkeContext {
-    receiver: HpkePublicKey,
-    reply_pair: HpkeKeyPair,
+pub(crate) struct HpkeContext {
+    pub(crate) receiver: HpkePublicKey,
+    pub(crate) reply_pair: HpkeKeyPair,
 }
 
 #[cfg(feature = "v2")]

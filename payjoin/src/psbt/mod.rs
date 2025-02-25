@@ -1,6 +1,6 @@
 //! Utilities to make work with PSBTs easier
 
-#[cfg(feature = "psbt-merge")]
+#[cfg(feature = "multiparty")]
 pub(crate) mod merge;
 
 use std::collections::BTreeMap;
