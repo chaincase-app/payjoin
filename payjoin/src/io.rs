@@ -1,5 +1,6 @@
 //! IO-related types and functions. Specifically, fetching OHTTP keys from a payjoin directory.
 
+use http::header::ACCEPT;
 use reqwest::{Client, Proxy};
 
 use crate::into_url::IntoUrl;
@@ -17,10 +18,10 @@ pub async fn fetch_ohttp_keys(
     ohttp_relay: impl IntoUrl,
     payjoin_directory: impl IntoUrl,
 ) -> Result<OhttpKeys, Error> {
-    let ohttp_keys_url = payjoin_directory.into_url()?.join("/ohttp-keys")?;
+    let ohttp_keys_url = payjoin_directory.into_url()?.join("/.well-known/ohttp-gateway")?;
     let proxy = Proxy::all(ohttp_relay.into_url()?.as_str())?;
     let client = Client::builder().proxy(proxy).build()?;
-    let res = client.get(ohttp_keys_url).send().await?;
+    let res = client.get(ohttp_keys_url).header(ACCEPT, "application/ohttp-keys").send().await?;
     let body = res.bytes().await?.to_vec();
     OhttpKeys::decode(&body).map_err(|e| Error(InternalError::InvalidOhttpKeys(e.to_string())))
 }
@@ -41,14 +42,14 @@ pub async fn fetch_ohttp_keys_with_cert(
     payjoin_directory: impl IntoUrl,
     cert_der: Vec<u8>,
 ) -> Result<OhttpKeys, Error> {
-    let ohttp_keys_url = payjoin_directory.into_url()?.join("/ohttp-keys")?;
+    let ohttp_keys_url = payjoin_directory.into_url()?.join("/.well-known/ohttp-gateway")?;
     let proxy = Proxy::all(ohttp_relay.into_url()?.as_str())?;
     let client = Client::builder()
         .use_rustls_tls()
         .add_root_certificate(reqwest::tls::Certificate::from_der(&cert_der)?)
         .proxy(proxy)
         .build()?;
-    let res = client.get(ohttp_keys_url).send().await?;
+    let res = client.get(ohttp_keys_url).header(ACCEPT, "application/ohttp-keys").send().await?;
     let body = res.bytes().await?.to_vec();
     OhttpKeys::decode(&body).map_err(|e| Error(InternalError::InvalidOhttpKeys(e.to_string())))
 }

@@ -200,7 +200,7 @@ mod integration {
                 let agent = services.http_agent();
                 services.wait_for_services_ready().await?;
                 let directory = services.directory_url();
-                let mock_ohttp_relay = directory.clone(); // pass through to directory
+                let mock_ohttp_relay = services.ohttp_gateway_url();
                 let mock_address = Address::from_str("tb1q6d3a2w975yny0asuvd9a67ner4nks58ff0q8g4")?
                     .assume_checked();
                 let mut bad_initializer =
@@ -228,7 +228,7 @@ mod integration {
                 let (_bitcoind, sender, receiver) = init_bitcoind_sender_receiver(None, None)?;
                 services.wait_for_services_ready().await?;
                 let directory = services.directory_url();
-                let ohttp_relay = services.ohttp_relay_url();
+                let ohttp_relay = services.ohttp_gateway_url();
                 let ohttp_keys = services.fetch_ohttp_keys().await?;
                 // **********************
                 // Inside the Receiver:
@@ -290,7 +290,7 @@ mod integration {
                     Receiver::new(address.clone(), directory.clone(), ohttp_keys.clone(), None)?;
                 println!("session: {:#?}", &session);
                 // Poll receive request
-                let mock_ohttp_relay = directory.clone();
+                let mock_ohttp_relay = services.ohttp_gateway_url();
                 let (req, ctx) = session.extract_req(&mock_ohttp_relay)?;
                 let response = agent.post(req.url).body(req.body).send().await?;
                 assert!(response.status().is_success(), "error response: {}", response.status());
@@ -483,7 +483,7 @@ mod integration {
                 let agent_clone: Arc<Client> = agent.clone();
                 let receiver: Arc<bitcoincore_rpc::Client> = Arc::new(receiver);
                 let receiver_clone = receiver.clone();
-                let mock_ohttp_relay = directory.clone();
+                let mock_ohttp_relay = services.ohttp_gateway_url();
                 let receiver_loop = tokio::task::spawn(async move {
                     let agent_clone = agent_clone.clone();
                     let (response, ctx) = loop {
