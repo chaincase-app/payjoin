@@ -28,6 +28,9 @@ pub mod receive;
 #[cfg(feature = "_core")]
 pub mod send;
 
+#[cfg(feature = "_core")]
+pub mod traits;
+
 #[cfg(feature = "v2")]
 pub(crate) mod hpke;
 #[cfg(feature = "v2")]
