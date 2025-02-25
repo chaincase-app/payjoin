@@ -1,4 +1,5 @@
 //! Receive BIP 77 Payjoin v2
+use std::fmt::Debug;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
@@ -19,6 +20,7 @@ use super::{
 use crate::hpke::{decrypt_message_a, encrypt_message_b, HpkeKeyPair, HpkePublicKey};
 use crate::ohttp::{ohttp_decapsulate, ohttp_encapsulate, OhttpEncapsulationError, OhttpKeys};
 use crate::receive::{parse_payload, InputPair};
+use crate::traits::Persister;
 use crate::uri::ShortId;
 use crate::{IntoUrl, IntoUrlError, Request};
 
@@ -233,12 +235,16 @@ impl UncheckedProposal {
     /// Broadcasting the Original PSBT after some time in the failure case makes incurs sender cost and prevents probing.
     ///
     /// Call this after checking downstream.
-    pub fn check_broadcast_suitability(
+    pub fn check_broadcast_suitability<P: Persister>(
         self,
         min_fee_rate: Option<FeeRate>,
         can_broadcast: impl Fn(&bitcoin::Transaction) -> Result<bool, ImplementationError>,
-    ) -> Result<MaybeInputsOwned, ReplyableError> {
-        let inner = self.v1.check_broadcast_suitability(min_fee_rate, can_broadcast)?;
+        persistor: P,
+    ) -> Result<MaybeInputsOwned, ReplyableError>
+    where
+        P::Key: From<bitcoin::Txid>,
+    {
+        let inner = self.v1.check_broadcast_suitability(min_fee_rate, can_broadcast, persistor)?;
         Ok(MaybeInputsOwned { v1: inner, context: self.context })
     }
 
@@ -578,6 +584,7 @@ mod test {
     use payjoin_test_utils::BoxError;
 
     use super::*;
+    use crate::receive::v1::NoopPersister;
 
     const KEY_ID: KeyId = 1;
     const KEM: Kem = Kem::K256Sha256;
@@ -608,9 +615,10 @@ mod test {
             context: SHARED_CONTEXT.clone(),
         };
 
+        let noop_persister = NoopPersister;
         let server_error = proposal
             .clone()
-            .check_broadcast_suitability(None, |_| Err("mock error".into()))
+            .check_broadcast_suitability(None, |_| Err("mock error".into()), noop_persister)
             .err()
             .ok_or("expected error but got success")?;
         assert_eq!(

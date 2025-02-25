@@ -9,7 +9,7 @@ mod integration {
     use bitcoin::{Amount, FeeRate, OutPoint, TxIn, TxOut, Weight};
     use bitcoind::bitcoincore_rpc::json::{AddressType, WalletProcessPsbtResult};
     use bitcoind::bitcoincore_rpc::{self, RpcApi};
-    use payjoin::receive::v1::build_v1_pj_uri;
+    use payjoin::receive::v1::{build_v1_pj_uri, NoopPersister};
     use payjoin::receive::ReplyableError::Implementation;
     use payjoin::receive::{ImplementationError, InputPair};
     use payjoin::{PjUri, Request, Uri};
@@ -169,6 +169,7 @@ mod integration {
 
         use bitcoin::Address;
         use http::StatusCode;
+        use payjoin::receive::v1::NoopPersister;
         use payjoin::receive::v2::{PayjoinProposal, Receiver, UncheckedProposal};
         use payjoin::send::v2::SenderBuilder;
         use payjoin::{OhttpKeys, PjUri, UriExt};
@@ -447,7 +448,6 @@ mod integration {
                 let directory = services.directory_url();
                 let ohttp_keys = services.fetch_ohttp_keys().await?;
                 let address = receiver.get_new_address(None, None)?.assume_checked();
-
                 let mut session =
                     Receiver::new(address, directory.clone(), ohttp_keys.clone(), None)?;
 
@@ -563,15 +563,22 @@ mod integration {
         ) -> Result<PayjoinProposal, BoxError> {
             // in a payment processor where the sender could go offline, this is where you schedule to broadcast the original_tx
             let _to_broadcast_in_failure_case = proposal.extract_tx_to_schedule_broadcast();
+            let noop_persister = NoopPersister;
 
             // Receive Check 1: Can Broadcast
-            let proposal = proposal.check_broadcast_suitability(None, |tx| {
-                Ok(receiver
-                    .test_mempool_accept(&[bitcoin::consensus::encode::serialize_hex(&tx)])?
-                    .first()
-                    .ok_or(ImplementationError::from("testmempoolaccept should return a result"))?
-                    .allowed)
-            })?;
+            let proposal = proposal.check_broadcast_suitability(
+                None,
+                |tx| {
+                    Ok(receiver
+                        .test_mempool_accept(&[bitcoin::consensus::encode::serialize_hex(&tx)])?
+                        .first()
+                        .ok_or(ImplementationError::from(
+                            "testmempoolaccept should return a result",
+                        ))?
+                        .allowed)
+                },
+                noop_persister,
+            )?;
 
             // Receive Check 2: receiver can't sign for proposal inputs
             let proposal = proposal.check_inputs_not_owned(|input| {
@@ -899,15 +906,19 @@ mod integration {
     ) -> Result<payjoin::receive::v1::PayjoinProposal, BoxError> {
         // in a payment processor where the sender could go offline, this is where you schedule to broadcast the original_tx
         let _to_broadcast_in_failure_case = proposal.extract_tx_to_schedule_broadcast();
-
+        let noop_persister = NoopPersister;
         // Receive Check 1: Can Broadcast
-        let proposal = proposal.check_broadcast_suitability(None, |tx| {
-            Ok(receiver
-                .test_mempool_accept(&[bitcoin::consensus::encode::serialize_hex(&tx)])?
-                .first()
-                .ok_or(ImplementationError::from("testmempoolaccept should return a result"))?
-                .allowed)
-        })?;
+        let proposal = proposal.check_broadcast_suitability(
+            None,
+            |tx| {
+                Ok(receiver
+                    .test_mempool_accept(&[bitcoin::consensus::encode::serialize_hex(&tx)])?
+                    .first()
+                    .ok_or(ImplementationError::from("testmempoolaccept should return a result"))?
+                    .allowed)
+            },
+            noop_persister,
+        )?;
 
         // Receive Check 2: receiver can't sign for proposal inputs
         let proposal = proposal.check_inputs_not_owned(|input| {

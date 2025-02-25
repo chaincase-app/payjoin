@@ -25,11 +25,13 @@
 //! [reference implementation](https://github.com/payjoin/rust-payjoin/tree/master/payjoin-cli)
 
 use std::cmp::{max, min};
+use std::fmt::Debug;
 
 use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::rand::seq::SliceRandom;
 use bitcoin::secp256k1::rand::{self, Rng};
 use bitcoin::{Amount, FeeRate, OutPoint, Script, TxIn, TxOut, Weight};
+use serde::{Deserialize, Serialize};
 
 use super::error::{
     InputContributionError, InternalInputContributionError, InternalOutputSubstitutionError,
@@ -41,11 +43,36 @@ use super::{
 };
 use crate::psbt::PsbtExt;
 use crate::receive::InternalPayloadError;
-
+use crate::traits::Persister;
 #[cfg(feature = "v1")]
 mod exclusive;
 #[cfg(feature = "v1")]
 pub use exclusive::*;
+
+// macro_rules! impl_persistable {
+//     ($state_machine_type:ident) => {
+//         impl Persistable for $state_machine_type {
+//             type Key = [u8; 32]; // Using original proposal txid as key
+//             fn save(&self) -> Result<(Self::Key, Vec<u8>), PersistableError> {
+//                 let mut key = [0u8; 32];
+//                 let writer = &mut key.as_mut_slice();
+//                 self.psbt
+//                     .unsigned_tx
+//                     .compute_txid()
+//                     .consensus_encode(writer)
+//                     .expect("32 bytes is sufficient for txid");
+//                 let data =
+//                     serde_json::to_vec(self).map_err(InternalPersistableError::Serialization)?;
+//                 Ok((key, data))
+//             }
+//             fn load(data: &[u8]) -> Result<Self, PersistableError> {
+//                 let result = serde_json::from_slice(data)
+//                     .map_err(InternalPersistableError::Serialization)?;
+//                 Ok(result)
+//             }
+//         }
+//     };
+// }
 
 /// The sender's original PSBT and optional parameters
 ///
@@ -56,7 +83,7 @@ pub use exclusive::*;
 /// transaction with extract_tx_to_schedule_broadcast() and schedule, followed by checking
 /// that the transaction can be broadcast with check_broadcast_suitability. Otherwise it is safe to
 /// call assume_interactive_receive to proceed with validation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UncheckedProposal {
     pub(crate) psbt: Psbt,
     pub(crate) params: Params,
@@ -90,11 +117,15 @@ impl UncheckedProposal {
     /// Broadcasting the Original PSBT after some time in the failure case makes incurs sender cost and prevents probing.
     ///
     /// Call this after checking downstream.
-    pub fn check_broadcast_suitability(
+    pub fn check_broadcast_suitability<P: Persister>(
         self,
         min_fee_rate: Option<FeeRate>,
         can_broadcast: impl Fn(&bitcoin::Transaction) -> Result<bool, ImplementationError>,
-    ) -> Result<MaybeInputsOwned, ReplyableError> {
+        persistor: P,
+    ) -> Result<MaybeInputsOwned, ReplyableError>
+    where
+        P::Key: From<bitcoin::Txid>,
+    {
         let original_psbt_fee_rate = self.psbt_fee_rate()?;
         if let Some(min_fee_rate) = min_fee_rate {
             if original_psbt_fee_rate < min_fee_rate {
@@ -108,6 +139,9 @@ impl UncheckedProposal {
         if can_broadcast(&self.psbt.clone().extract_tx_unchecked_fee_rate())
             .map_err(ReplyableError::Implementation)?
         {
+            persistor
+                .save(self.psbt.unsigned_tx.compute_txid().into(), self.clone())
+                .map_err(|e| ReplyableError::Implementation(e.into()))?;
             Ok(MaybeInputsOwned { psbt: self.psbt, params: self.params })
         } else {
             Err(InternalPayloadError::OriginalPsbtNotBroadcastable.into())
@@ -127,7 +161,7 @@ impl UncheckedProposal {
 /// Typestate to validate that the Original PSBT has no receiver-owned inputs.
 ///
 /// Call [`Self::check_inputs_not_owned`] to proceed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaybeInputsOwned {
     psbt: Psbt,
     params: Params,
@@ -170,7 +204,7 @@ impl MaybeInputsOwned {
 /// Typestate to validate that the Original PSBT has no inputs that have been seen before.
 ///
 /// Call [`Self::check_no_inputs_seen_before`] to proceed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaybeInputsSeen {
     psbt: Psbt,
     params: Params,
@@ -202,7 +236,7 @@ impl MaybeInputsSeen {
 ///
 /// Only accept PSBTs that send us money.
 /// Identify those outputs with [`Self::identify_receiver_outputs`] to proceed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputsUnknown {
     psbt: Psbt,
     params: Params,
@@ -765,7 +799,7 @@ impl ProvisionalProposal {
 
 /// A finalized payjoin proposal, complete with fees and receiver signatures, that the sender
 /// should find acceptable.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayjoinProposal {
     payjoin_psbt: Psbt,
     params: Params,
@@ -782,6 +816,31 @@ impl PayjoinProposal {
 
     pub fn psbt(&self) -> &Psbt { &self.payjoin_psbt }
 }
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NoopPersister;
+
+#[derive(Debug)]
+pub struct NoopPersisterError;
+
+impl std::error::Error for NoopPersisterError {}
+
+impl std::fmt::Display for NoopPersisterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NoopPersisterError")
+    }
+}
+
+impl Persister for NoopPersister {
+    type Key = bitcoin::Txid;
+    type Error = NoopPersisterError;
+    fn save<T: Serialize>(&self, _key: Self::Key, _value: T) -> Result<(), Self::Error> { Ok(()) }
+}
+
+// impl_persistable!(UncheckedProposal);
+// impl_persistable!(MaybeInputsOwned);
+// impl_persistable!(MaybeInputsSeen);
+// impl_persistable!(OutputsUnknown);
 
 #[cfg(test)]
 pub(crate) mod test {

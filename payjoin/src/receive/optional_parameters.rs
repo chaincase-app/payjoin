@@ -3,8 +3,9 @@ use std::fmt;
 
 use bitcoin::FeeRate;
 use log::warn;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Params {
     // version
     pub v: usize,
