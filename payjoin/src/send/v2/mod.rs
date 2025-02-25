@@ -326,14 +326,19 @@ impl HpkeContext {
 
 #[cfg(test)]
 mod test {
-    #[test]
-    fn req_ctx_ser_de_roundtrip() -> Result<(), payjoin_test_utils::BoxError> {
-        use super::*;
-        use crate::send::test::ORIGINAL_PSBT;
+    use bitcoin::hex::FromHex;
+    use payjoin_test_utils::BoxError;
 
+    use super::*;
+    use crate::receive::v1::test::ORIGINAL_PSBT;
+    use crate::receive::v2::test::SHARED_CONTEXT;
+
+    const SERIALIZED_BODY: &str = "63484e696450384241484d43414141414159386e757447674a647959475857694245623435486f65396c5747626b78682f36624e694f4a6443447544414141414141442b2f2f2f2f41747956754155414141414146366b554865684a38476e536442554f4f7636756a584c72576d734a5244434867495165414141414141415871525233514a62627a30686e513849765130667074476e2b766f746e656f66544141414141414542494b6762317755414141414146366b55336b34656b47484b57524e6241317256357452356b455644564e4348415163584667415578347046636c4e56676f31575741644e3153594e583874706854414243477343527a424541694238512b41366465702b527a393276687932366c5430416a5a6e3450524c6938426639716f422f434d6b30774967502f526a3250575a3367456a556b546c6844524e415130675877544f3774396e2b563134705a366f6c6a554249514d566d7341616f4e5748564d5330324c6654536530653338384c4e697450613155515a794f6968592b464667414241425941464562324769753663344b4f35595730706677336c4770396a4d55554141413d0a763d32";
+
+    fn create_sender_context() -> Result<super::Sender, BoxError> {
         let psbt = Psbt::from_str(ORIGINAL_PSBT)?;
         let endpoint = Url::parse("http://localhost:1234")?;
-        let req_ctx = Sender {
+        Ok(super::Sender {
             v1: v1::Sender {
                 psbt,
                 endpoint,
@@ -343,10 +348,82 @@ mod test {
                 payee: ScriptBuf::from(vec![0x00]),
             },
             reply_key: HpkeKeyPair::gen_keypair().0,
-        };
-        let serialized = serde_json::to_string(&req_ctx)?;
+        })
+    }
+
+    #[test]
+    fn sender_ser_de_roundtrip() -> Result<(), BoxError> {
+        let sender = create_sender_context()?;
+        let serialized = serde_json::to_string(&sender)?;
         let deserialized = serde_json::from_str(&serialized)?;
-        assert!(req_ctx == deserialized);
+        assert!(sender == deserialized);
+        Ok(())
+    }
+
+    #[test]
+    fn test_serialize_v2() -> Result<(), BoxError> {
+        let sender = create_sender_context()?;
+        let body = serialize_v2_body(
+            &sender.v1.psbt,
+            sender.v1.disable_output_substitution,
+            sender.v1.fee_contribution,
+            sender.v1.min_fee_rate,
+        );
+        assert_eq!(body.as_ref().unwrap(), &<Vec<u8> as FromHex>::from_hex(SERIALIZED_BODY)?,);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_v2_success() -> Result<(), BoxError> {
+        let mut sender = create_sender_context()?;
+        let exp_time = SHARED_CONTEXT.expiry;
+        sender.v1.endpoint.set_exp(exp_time);
+
+        let receiver_pubkey = SHARED_CONTEXT.s.1.clone();
+        sender.v1.endpoint.set_receiver_pubkey(receiver_pubkey);
+
+        let ohttp_relay = SHARED_CONTEXT.directory.clone();
+        let ohttp_keys = SHARED_CONTEXT.ohttp_keys.clone();
+        sender.v1.endpoint.set_ohttp(ohttp_keys);
+
+        let result = sender.extract_v2(ohttp_relay);
+        assert!(result.is_ok(), "Expected Ok result, got: {:#?}", result.err());
+        let (request, context) = result?;
+
+        assert!(!request.body.is_empty(), "Request body should not be empty");
+        assert_eq!(request.url, Url::parse("https://relay.com")?);
+        assert_eq!(context.endpoint, sender.v1.endpoint);
+        assert_eq!(context.psbt_ctx.original_psbt, sender.v1.psbt);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_v2_fails_with_missing_keys() -> Result<(), BoxError> {
+        let mut sender = create_sender_context()?;
+        let exp_time = SHARED_CONTEXT.expiry;
+        sender.v1.endpoint.set_exp(exp_time);
+        let receiver_pubkey = SHARED_CONTEXT.s.1.clone();
+        sender.v1.endpoint.set_receiver_pubkey(receiver_pubkey);
+        let ohttp_relay = SHARED_CONTEXT.directory.clone();
+        //Not including ohttp_keys will cause a missing ohttp config panic
+        let result = sender.extract_v2(ohttp_relay);
+        assert!(result.is_err(), "{:#?}", result.err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_v2_fails_when_expired() -> Result<(), BoxError> {
+        let mut sender = create_sender_context()?;
+        let exp_time = std::time::SystemTime::now();
+        sender.v1.endpoint.set_exp(exp_time);
+        let receiver_pubkey = SHARED_CONTEXT.s.1.clone();
+        sender.v1.endpoint.set_receiver_pubkey(receiver_pubkey);
+        let ohttp_relay = SHARED_CONTEXT.directory.clone();
+        let ohttp_keys = SHARED_CONTEXT.ohttp_keys.clone();
+        sender.v1.endpoint.set_ohttp(ohttp_keys);
+        //Setting expiry time equal to system time will cause an expiry panic
+        let result = sender.extract_v2(ohttp_relay);
+        assert!(result.is_err(), "{:#?}", result.err());
         Ok(())
     }
 }

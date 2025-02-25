@@ -29,15 +29,15 @@ const SUPPORTED_VERSIONS: &[usize] = &[1, 2];
 static TWENTY_FOUR_HOURS_DEFAULT_EXPIRY: Duration = Duration::from_secs(60 * 60 * 24);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct SessionContext {
+pub struct SessionContext {
     #[serde(deserialize_with = "deserialize_address_assume_checked")]
-    address: Address,
-    directory: url::Url,
-    subdirectory: Option<url::Url>,
-    ohttp_keys: OhttpKeys,
-    expiry: SystemTime,
-    s: HpkeKeyPair,
-    e: Option<HpkePublicKey>,
+    pub address: Address,
+    pub directory: url::Url,
+    pub subdirectory: Option<url::Url>,
+    pub ohttp_keys: OhttpKeys,
+    pub expiry: SystemTime,
+    pub s: HpkeKeyPair,
+    pub e: Option<HpkePublicKey>,
 }
 
 fn deserialize_address_assume_checked<'de, D>(deserializer: D) -> Result<Address, D::Error>
@@ -569,7 +569,7 @@ fn id(s: &HpkeKeyPair) -> ShortId {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use std::str::FromStr;
 
     use ohttp::hpke::{Aead, Kdf, Kem};
@@ -587,7 +587,7 @@ mod test {
     static EXAMPLE_URL: Lazy<Url> =
         Lazy::new(|| Url::parse("https://relay.com").expect("invalid URL"));
 
-    static SHARED_CONTEXT: Lazy<SessionContext> = Lazy::new(|| SessionContext {
+    pub(crate) static SHARED_CONTEXT: Lazy<SessionContext> = Lazy::new(|| SessionContext {
         address: Address::from_str("tb1q6d3a2w975yny0asuvd9a67ner4nks58ff0q8g4")
             .expect("valid address")
             .assume_checked(),
