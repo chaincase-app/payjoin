@@ -488,20 +488,25 @@ impl PayjoinProposal {
         &mut self,
         ohttp_relay: impl IntoUrl,
     ) -> Result<(Request, ohttp::ClientResponse), Error> {
+        use crate::hpke::PADDED_PLAINTEXT_B_LENGTH;
+
         let target_resource: Url;
         let body: Vec<u8>;
         let method: &str;
 
         if let Some(e) = &self.context.e {
             // Prepare v2 payload
-            let payjoin_bytes = self.v1.psbt().serialize();
+            let mut payjoin_bytes = self.v1.psbt().serialize();
             let sender_subdir = subdir_path_from_pubkey(e);
             target_resource = self
                 .context
                 .directory
                 .join(&sender_subdir.to_string())
                 .map_err(|e| ReplyableError::Implementation(e.into()))?;
-            body = encrypt_message_b(payjoin_bytes, &self.context.s, e)?;
+            payjoin_bytes.resize(PADDED_PLAINTEXT_B_LENGTH, 0);
+
+            body =
+                encrypt_message_b(payjoin_bytes.clone().try_into().unwrap(), &self.context.s, e)?;
             method = "POST";
         } else {
             // Prepare v2 wrapped and backwards-compatible v1 payload
