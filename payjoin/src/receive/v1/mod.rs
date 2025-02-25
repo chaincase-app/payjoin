@@ -26,10 +26,12 @@
 
 use std::cmp::{max, min};
 
+use bitcoin::consensus::Encodable;
 use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::rand::seq::SliceRandom;
 use bitcoin::secp256k1::rand::{self, Rng};
 use bitcoin::{Amount, FeeRate, OutPoint, Script, TxIn, TxOut, Weight};
+use serde::{Deserialize, Serialize};
 
 use super::error::{
     InputContributionError, InternalInputContributionError, InternalOutputSubstitutionError,
@@ -41,11 +43,34 @@ use super::{
 };
 use crate::psbt::PsbtExt;
 use crate::receive::InternalPayloadError;
-
+use crate::traits::{Persistable, PersistableError};
 #[cfg(feature = "v1")]
 mod exclusive;
 #[cfg(feature = "v1")]
 pub use exclusive::*;
+
+macro_rules! impl_persistable {
+    ($state_machine_type:ident) => {
+        impl Persistable for $state_machine_type {
+            type Key = [u8; 32]; // Using original proposal txid as key
+            fn save(&self) -> Result<(Self::Key, Vec<u8>), PersistableError> {
+                let mut key = [0u8; 32];
+                let writer = &mut key.as_mut_slice();
+                self.psbt
+                    .unsigned_tx
+                    .compute_txid()
+                    .consensus_encode(writer)
+                    .expect("32 bytes is sufficient for txid");
+                let data =
+                    serde_json::to_vec(self).map_err(|e| PersistableError::Serialization(e))?;
+                Ok((key, data))
+            }
+            fn load(data: &[u8]) -> Result<Self, PersistableError> {
+                serde_json::from_slice(data).map_err(|e| PersistableError::Serialization(e))
+            }
+        }
+    };
+}
 
 /// The sender's original PSBT and optional parameters
 ///
@@ -56,7 +81,7 @@ pub use exclusive::*;
 /// transaction with extract_tx_to_schedule_broadcast() and schedule, followed by checking
 /// that the transaction can be broadcast with check_broadcast_suitability. Otherwise it is safe to
 /// call assume_interactive_receive to proceed with validation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UncheckedProposal {
     pub(crate) psbt: Psbt,
     pub(crate) params: Params,
@@ -127,7 +152,7 @@ impl UncheckedProposal {
 /// Typestate to validate that the Original PSBT has no receiver-owned inputs.
 ///
 /// Call [`Self::check_inputs_not_owned`] to proceed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaybeInputsOwned {
     psbt: Psbt,
     params: Params,
@@ -170,7 +195,7 @@ impl MaybeInputsOwned {
 /// Typestate to validate that the Original PSBT has no inputs that have been seen before.
 ///
 /// Call [`Self::check_no_inputs_seen_before`] to proceed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaybeInputsSeen {
     psbt: Psbt,
     params: Params,
@@ -202,7 +227,7 @@ impl MaybeInputsSeen {
 ///
 /// Only accept PSBTs that send us money.
 /// Identify those outputs with [`Self::identify_receiver_outputs`] to proceed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputsUnknown {
     psbt: Psbt,
     params: Params,
@@ -765,7 +790,7 @@ impl ProvisionalProposal {
 
 /// A finalized payjoin proposal, complete with fees and receiver signatures, that the sender
 /// should find acceptable.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayjoinProposal {
     payjoin_psbt: Psbt,
     params: Params,
@@ -783,11 +808,18 @@ impl PayjoinProposal {
     pub fn psbt(&self) -> &Psbt { &self.payjoin_psbt }
 }
 
+impl_persistable!(UncheckedProposal);
+impl_persistable!(MaybeInputsOwned);
+impl_persistable!(MaybeInputsSeen);
+impl_persistable!(OutputsUnknown);
+
 #[cfg(test)]
 pub(crate) mod test {
     use std::str::FromStr;
 
+    use bitcoin::consensus::Decodable;
     use bitcoin::{Address, Network};
+    use payjoin_test_utils::BoxError;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
@@ -805,6 +837,29 @@ pub(crate) mod test {
         let pairs = url::form_urlencoded::parse(QUERY_PARAMS.as_bytes());
         let params = Params::from_query_pairs(pairs, &[1])?;
         Ok(UncheckedProposal { psbt: bitcoin::Psbt::from_str(ORIGINAL_PSBT)?, params })
+    }
+
+    #[test]
+    fn round_trip_serialize_deserialize() -> Result<(), BoxError> {
+        let proposal = proposal_from_test_vector()?;
+        let serialized = proposal.save()?;
+        let key_bytes = serialized.0;
+        let key = bitcoin::Txid::consensus_decode(&mut &key_bytes[..])?;
+        assert_eq!(key, proposal.psbt.unsigned_tx.compute_txid());
+
+        let deserialized = UncheckedProposal::load(&serialized.1)?;
+        assert_eq!(proposal.psbt, deserialized.psbt);
+        assert_eq!(proposal.params.v, deserialized.params.v);
+        assert_eq!(
+            proposal.params.disable_output_substitution,
+            deserialized.params.disable_output_substitution
+        );
+        assert_eq!(
+            proposal.params.additional_fee_contribution,
+            deserialized.params.additional_fee_contribution
+        );
+        assert_eq!(proposal.params.min_fee_rate, deserialized.params.min_fee_rate);
+        Ok(())
     }
 
     #[test]
