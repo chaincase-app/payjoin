@@ -11,6 +11,7 @@
 
 use std::str::FromStr;
 
+use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::{psbt, AddressType, Psbt, TxIn, TxOut};
 pub(crate) use error::InternalPayloadError;
 pub use error::{
@@ -84,4 +85,29 @@ pub(crate) fn parse_payload(
     log::debug!("Received request with params: {:?}", params);
 
     Ok((psbt, params))
+}
+
+#[derive(Debug)]
+pub struct PersisterId {
+    txid: bitcoin::Txid,
+    state_type: u8,
+}
+
+impl PersisterId {
+    pub fn new(txid: bitcoin::Txid, state_type: u8) -> Self { Self { txid, state_type } }
+
+    pub fn to_bytes(&self) -> Result<[u8; 33], bitcoin::consensus::encode::Error> {
+        let mut bytes = [0u8; 33];
+        let mut writer = bytes.as_mut_slice();
+        self.txid.consensus_encode(&mut writer)?;
+        self.state_type.consensus_encode(&mut writer)?;
+        Ok(bytes)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let mut reader = bytes;
+        let txid = bitcoin::Txid::consensus_decode(&mut reader)?;
+        let state_type = u8::consensus_decode(&mut reader)?;
+        Ok(Self { txid, state_type })
+    }
 }
